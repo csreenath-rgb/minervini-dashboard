@@ -280,6 +280,17 @@ describe('fundamentalsScore', () => {
     assert.equal(f.pass, true, JSON.stringify(f.reasons));
     assert.match(f.reasons.join(' '), /not accelerating|decelerat/i);
   });
+  test('MSFT regression: 20-25% growth even when decelerating -> passes (threshold is >=20%, acceleration is informational)', () => {
+    const quarters = [
+      q('2023-03-31', 1.00, 90e9, 9e9), q('2023-06-30', 1.00, 90e9, 9e9),
+      q('2023-09-30', 1.00, 90e9, 9e9), q('2023-12-31', 1.00, 90e9, 9e9),
+      q('2024-03-31', 1.40, 95e9, 10e9), // +40%
+      q('2024-06-30', 1.23, 96e9, 10e9), // +23% — decelerating but >= 20%
+    ];
+    const f = fundamentalsScore(quarters);
+    assert.equal(f.pass, true, JSON.stringify(f.reasons));
+    assert.match(f.reasons.join(' '), /not accelerating|decelerat/i);
+  });
   test('weak and decelerating growth (30% -> 15%) -> fails', () => {
     const quarters = [
       q('2023-03-31', 1.00, 90e9, 9e9), q('2023-06-30', 1.00, 90e9, 9e9),
