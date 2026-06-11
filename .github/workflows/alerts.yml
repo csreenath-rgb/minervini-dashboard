@@ -1,0 +1,33 @@
+name: Watchlist alerts
+
+on:
+  schedule:
+    # Twice each trading day (approx. 9:45am and 3:45pm US Eastern during DST).
+    # GitHub cron is UTC; during winter (EST) these run at 8:45am/2:45pm ET.
+    - cron: '45 13 * * 1-5'
+    - cron: '45 19 * * 1-5'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check watchlist for entry/exit triggers
+        run: node scripts/check_alerts.mjs watchlist.json alerts.json
+
+      - name: Email triggered alerts
+        if: always()
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python3 scripts/send_email.py alerts.json

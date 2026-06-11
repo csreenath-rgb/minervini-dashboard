@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install test dependencies
+        run: npm install jsdom --no-save
+
+      - name: Unit tests (engine)
+        run: node --test tests/engine.test.mjs
+
+      - name: Integration tests (data layer, alert script, live smoke)
+        run: node --test tests/integration.test.mjs
+
+      - name: UI / headless end-to-end tests
+        run: node --test tests/ui.test.mjs
