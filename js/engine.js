@@ -352,12 +352,20 @@ export function fundamentalsScore(quarters) {
 
   const lastEps = epsGrowthYoY.at(-1), prevEps = epsGrowthYoY.at(-2);
   const epsStrong = lastEps != null && lastEps >= 20;
-  const epsAccelerating = lastEps != null && prevEps != null && lastEps >= prevEps;
-  const pass = !!(epsStrong && epsAccelerating);
+  // Acceleration can only be judged when a prior YoY point exists. Yahoo often
+  // returns just ~5 quarters (one YoY point); unknown acceleration must not fail
+  // an otherwise strong grower. Deceleration only disqualifies when growth has
+  // also dropped below 25% — very strong growth (≥25%) passes with a warning.
+  const accelKnown = lastEps != null && prevEps != null;
+  const epsAccelerating = accelKnown && lastEps >= prevEps;
+  const pass = !!(epsStrong && (!accelKnown || epsAccelerating || lastEps >= 25));
 
+  const accelNote = !accelKnown
+    ? ', acceleration not assessable (insufficient history)'
+    : (epsAccelerating ? ', accelerating' : ', not accelerating (decelerating vs prior quarter — watch)');
   const reasons = [];
   reasons.push(lastEps == null ? 'EPS growth not computable'
-    : `Latest quarterly EPS growth ${lastEps}% YoY (want ≥20–25%) — ${epsStrong ? 'strong' : 'weak'}${epsAccelerating ? ', accelerating' : ', not accelerating'}`);
+    : `Latest quarterly EPS growth ${lastEps}% YoY (want ≥20–25%) — ${epsStrong ? 'strong' : 'weak'}${accelNote}`);
   if (revGrowthYoY.length) reasons.push(`Latest quarterly revenue growth ${revGrowthYoY.at(-1)}% YoY`);
   if (marginTrendUp != null) reasons.push(`Profit margin trend: ${marginTrendUp ? 'improving/stable' : 'deteriorating'}`);
 
