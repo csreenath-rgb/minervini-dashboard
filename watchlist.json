@@ -1,0 +1,5 @@
+[
+  { "symbol": "AAPL" },
+  { "symbol": "NVDA" },
+  { "symbol": "SPY", "entryPrice": 450 }
+]
