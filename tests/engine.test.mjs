@@ -256,6 +256,40 @@ describe('fundamentalsScore', () => {
     const f = fundamentalsScore(quarters);
     assert.equal(f.pass, false);
   });
+  test('GOOG regression: strong growth with only one YoY point (5 quarters) -> pass, acceleration not assessable', () => {
+    // Yahoo often returns only ~5 quarters; one YoY comparison is computable.
+    const quarters = [
+      q('2025-03-31', 2.81, 90e9, 23e9), q('2025-06-30', 2.31, 92e9, 21e9),
+      q('2025-09-30', 2.87, 95e9, 25e9), q('2025-12-31', 2.82, 100e9, 26e9),
+      q('2026-03-31', 5.11, 110e9, 35e9), // +81.85% YoY vs 2025-03-31
+    ];
+    const f = fundamentalsScore(quarters);
+    assert.equal(f.available, true);
+    assert.equal(f.epsGrowthYoY.length, 1);
+    assert.equal(f.pass, true, `81.85% growth must pass: ${JSON.stringify(f.reasons)}`);
+    assert.match(f.reasons.join(' '), /acceleration not assessable|insufficient history/i);
+  });
+  test('very strong but decelerating growth (100% -> 80%) -> still passes, with deceleration noted', () => {
+    const prior = [
+      q('2023-03-31', 1.00, 90e9, 9e9), q('2023-06-30', 1.00, 90e9, 9e9),
+      q('2023-09-30', 1.00, 90e9, 9e9), q('2023-12-31', 1.00, 90e9, 9e9),
+      q('2024-03-31', 1.00, 90e9, 9e9), q('2024-06-30', 2.00, 95e9, 11e9), // +100%
+    ];
+    const cur = [q('2024-09-30', 1.80, 96e9, 11e9)]; // +80% vs 1.00
+    const f = fundamentalsScore([...prior, ...cur]);
+    assert.equal(f.pass, true, JSON.stringify(f.reasons));
+    assert.match(f.reasons.join(' '), /not accelerating|decelerat/i);
+  });
+  test('weak and decelerating growth (30% -> 15%) -> fails', () => {
+    const quarters = [
+      q('2023-03-31', 1.00, 90e9, 9e9), q('2023-06-30', 1.00, 90e9, 9e9),
+      q('2023-09-30', 1.00, 90e9, 9e9), q('2023-12-31', 1.00, 90e9, 9e9),
+      q('2024-03-31', 1.30, 95e9, 10e9), // +30%
+      q('2024-06-30', 1.15, 96e9, 10e9), // +15% — weak and decelerating
+    ];
+    const f = fundamentalsScore(quarters);
+    assert.equal(f.pass, false, JSON.stringify(f.epsGrowthYoY));
+  });
   test('empty/missing data -> available=false, never throws', () => {
     assert.equal(fundamentalsScore([]).available, false);
     assert.equal(fundamentalsScore(null).available, false);
