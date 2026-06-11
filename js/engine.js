@@ -358,7 +358,9 @@ export function fundamentalsScore(quarters) {
   // also dropped below 25% — very strong growth (≥25%) passes with a warning.
   const accelKnown = lastEps != null && prevEps != null;
   const epsAccelerating = accelKnown && lastEps >= prevEps;
-  const pass = !!(epsStrong && (!accelKnown || epsAccelerating || lastEps >= 25));
+  // Pass/fail follows the stated criterion: latest quarterly EPS growth >= 20%.
+  // Acceleration vs the prior quarter is reported as supporting detail only.
+  const pass = !!epsStrong;
 
   const accelNote = !accelKnown
     ? ', acceleration not assessable (insufficient history)'
