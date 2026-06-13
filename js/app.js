@@ -7,10 +7,15 @@ import { analyzeTicker } from './engine.js';
 import { fetchTickerBundle } from './data.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
-  filterNewAlerts, verdictBadge,
+  filterNewAlerts, verdictBadge, msUntilNextSlot,
+  migrateCollection, getActiveItems, setActiveItems, getActiveList, listNames,
+  createWatchlist, setActiveWatchlist, renameWatchlist, deleteWatchlist,
+  addSubscriber, removeSubscriber, updateSubscriber, isValidEmail,
+  exportPublicWatchlist, exportMailingLists,
 } from './app-core.js';
 
-const WATCHLIST_KEY = 'minervini_watchlist';
+const WATCHLIST_KEY = 'minervini_watchlist';        // legacy single-list key (read once for migration)
+const COLLECTION_KEY = 'minervini_watchlists';      // v3 named-collection key
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
@@ -19,7 +24,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
  * @param {{document: Document, storage: Storage, fetchImpl?: typeof fetch,
  *          notify?: (title: string, body: string) => void, autoRefreshMs?: number}} deps
  */
-export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 5 * 60 * 1000 }) {
+export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 0, checkSlotsUtc = null }) {
   const $ = (id) => doc.getElementById(id);
   const state = {
     lastReport: null,
@@ -27,14 +32,51 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     chart: null,
   };
 
-  // ---------- watchlist persistence ----------
-  function getWatchlist() {
-    try { return JSON.parse(storage.getItem(WATCHLIST_KEY)) || []; }
-    catch { return []; }
+  // ---------- watchlist collection persistence ----------
+  function getCollection() {
+    let parsedNew = null;
+    try { parsedNew = JSON.parse(storage.getItem(COLLECTION_KEY)); } catch { parsedNew = null; }
+    let parsedLegacy = null;
+    if (!parsedNew) { try { parsedLegacy = JSON.parse(storage.getItem(WATCHLIST_KEY)); } catch { parsedLegacy = null; } }
+    return migrateCollection(parsedNew, parsedLegacy);
   }
-  function saveWatchlist(list) {
-    storage.setItem(WATCHLIST_KEY, JSON.stringify(list));
-    renderWatchlist(list);
+  function saveCollection(col) {
+    storage.setItem(COLLECTION_KEY, JSON.stringify(col));
+    renderAll(col);
+  }
+  function renderAll(col) {
+    renderListSelector(col);
+    renderSubscribers(col);
+    renderWatchlist(getActiveItems(col));
+  }
+  // The "active list" is what the rest of the app reads/writes, so the existing
+  // analyze / add / remove flows keep working unchanged on the selected list.
+  function getWatchlist() { return getActiveItems(getCollection()); }
+  function saveWatchlist(list) { saveCollection(setActiveItems(getCollection(), list)); }
+
+  // ---------- named-list actions ----------
+  function newWatchlist(name) { saveCollection(createWatchlist(getCollection(), name)); }
+  function selectWatchlist(name) { saveCollection(setActiveWatchlist(getCollection(), name)); }
+  function renameActiveWatchlist(newName) {
+    const col = getCollection();
+    saveCollection(renameWatchlist(col, getActiveList(col).name, newName));
+  }
+  function deleteActiveWatchlist() {
+    const col = getCollection();
+    saveCollection(deleteWatchlist(col, getActiveList(col).name));
+  }
+  // ---------- subscriber actions (operate on the active list) ----------
+  function addSubscriberToActive(email) {
+    const col = getCollection();
+    saveCollection(addSubscriber(col, getActiveList(col).name, email));
+  }
+  function removeSubscriberFromActive(email) {
+    const col = getCollection();
+    saveCollection(removeSubscriber(col, getActiveList(col).name, email));
+  }
+  function updateSubscriberOnActive(oldEmail, newEmail) {
+    const col = getCollection();
+    saveCollection(updateSubscriber(col, getActiveList(col).name, oldEmail, newEmail));
   }
 
   // ---------- rendering ----------
@@ -126,9 +168,19 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     });
   }
 
+  const revealAlertsToolbar = () => { const t = $('alerts-toolbar'); if (t) t.style.display = 'flex'; };
+
+  function clearAlerts() {
+    const el = $('alerts');
+    if (el) el.innerHTML = '';
+    state.seenAlertKeys = new Set(); // reset dedupe so still-valid triggers can re-fire
+    const t = $('alerts-toolbar'); if (t) t.style.display = 'none';
+  }
+
   function showAlerts(alerts, { notifyUser = false } = {}) {
     const el = $('alerts');
     if (alerts.length === 0) return;
+    revealAlertsToolbar();
     const html = alerts.map((a) =>
       `<div class="alert ${a.type === 'ENTRY' ? 'good' : a.type === 'EXIT' ? 'bad' : 'warn'}">
         <strong>[${esc(a.type)}] ${esc(a.symbol)}</strong> @ ${a.price.toFixed(2)} — ${esc(a.message)}
@@ -140,8 +192,33 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   function showError(message) {
+    revealAlertsToolbar();
     $('alerts').innerHTML =
       `<div class="alert bad"><strong>Error:</strong> ${esc(message)}</div>` + $('alerts').innerHTML;
+  }
+
+  function renderListSelector(col) {
+    const sel = $('watchlist-select');
+    if (!sel) return;
+    sel.innerHTML = listNames(col).map((n) =>
+      `<option value="${esc(n)}"${n === col.activeName ? ' selected' : ''}>${esc(n)}</option>`).join('');
+    sel.value = col.activeName;
+  }
+
+  function renderSubscribers(col) {
+    const el = $('subscribers');
+    if (!el) return;
+    const subs = getActiveList(col).subscribers;
+    if (!subs.length) {
+      el.innerHTML = '<p class="muted">No subscribers yet. Alerts for this list go to the dashboard owner.</p>';
+      return;
+    }
+    el.innerHTML = subs.map((e) =>
+      `<div class="watch-row"><strong>${esc(e)}</strong>
+        <button class="remove-sub" data-email="${esc(e)}">✕</button></div>`).join('');
+    for (const btn of el.querySelectorAll('.remove-sub')) {
+      btn.addEventListener('click', () => api.removeSubscriberFromActive(btn.getAttribute('data-email')));
+    }
   }
 
   function renderWatchlist(list, statuses = {}) {
@@ -219,7 +296,10 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   function exportWatchlistJson() {
-    return JSON.stringify(getWatchlist(), null, 2);
+    return JSON.stringify(exportPublicWatchlist(getCollection()), null, 2);
+  }
+  function exportMailingListsJson() {
+    return JSON.stringify(exportMailingLists(getCollection()), null, 2);
   }
 
   async function refreshWatchlist() {
@@ -255,24 +335,63 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   on('analyze-btn', () => analyze());
   on('add-watch-btn', () => addCurrentToWatchlist());
   on('refresh-btn', () => refreshWatchlist());
+  on('clear-alerts-btn', () => clearAlerts());
   on('copy-watchlist-btn', () => {
     const json = exportWatchlistJson();
     if (doc.defaultView?.navigator?.clipboard) doc.defaultView.navigator.clipboard.writeText(json);
     const out = $('watchlist-json');
     if (out) { out.value = json; out.style.display = 'block'; }
   });
+  on('copy-mailing-btn', () => {
+    const json = exportMailingListsJson();
+    if (doc.defaultView?.navigator?.clipboard) doc.defaultView.navigator.clipboard.writeText(json);
+    const out = $('mailing-json');
+    if (out) { out.value = json; out.style.display = 'block'; }
+  });
+  const winOf = () => doc.defaultView || (typeof window !== 'undefined' ? window : null);
+  const selEl = $('watchlist-select');
+  if (selEl) selEl.addEventListener('change', () => selectWatchlist(selEl.value));
+  on('new-watchlist-btn', () => {
+    const w = winOf(); const name = w && w.prompt ? w.prompt('Name for the new watchlist:') : null;
+    if (name) newWatchlist(name);
+  });
+  on('rename-watchlist-btn', () => {
+    const w = winOf(); const col = getCollection();
+    const name = w && w.prompt ? w.prompt('Rename this watchlist:', getActiveList(col).name) : null;
+    if (name) renameActiveWatchlist(name);
+  });
+  on('delete-watchlist-btn', () => {
+    const w = winOf(); const col = getCollection();
+    const ok = w && w.confirm ? w.confirm(`Delete watchlist "${getActiveList(col).name}"? Its subscribers are removed too.`) : true;
+    if (ok) deleteActiveWatchlist();
+  });
+  on('add-subscriber-btn', () => {
+    const inp = $('subscriber-input'); if (!inp) return;
+    const email = (inp.value || '').trim();
+    if (!isValidEmail(email)) { showError(`"${email}" is not a valid email address.`); return; }
+    addSubscriberToActive(email); inp.value = '';
+  });
   const input = $('ticker-input');
   if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
 
-  renderWatchlist(getWatchlist());
-  if (autoRefreshMs > 0) {
+  renderAll(getCollection());
+  const runAutoCheck = () => { if (getWatchlist().length > 0) refreshWatchlist(); };
+  if (Array.isArray(checkSlotsUtc) && checkSlotsUtc.length) {
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    const setT = (win && win.setTimeout) ? win.setTimeout.bind(win) : setTimeout;
+    const schedule = () => setT(() => { runAutoCheck(); schedule(); }, msUntilNextSlot(new Date(), checkSlotsUtc));
+    runAutoCheck(); // check once when the page opens
+    schedule();     // then at each daily slot, same times as the email job
+  } else if (autoRefreshMs > 0) {
     setInterval(() => { refreshWatchlist(); }, autoRefreshMs);
-    if (getWatchlist().length > 0) refreshWatchlist();
+    runAutoCheck();
   }
 
   const api = {
     analyze, addCurrentToWatchlist, removeWatch, setWatchlist,
-    exportWatchlistJson, refreshWatchlist, getWatchlist,
+    exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
+    getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
+    addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
   };
   return api;
 }
@@ -286,5 +405,5 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.
       Notification.requestPermission().then((p) => { if (p === 'granted') new Notification(title, { body }); });
     }
   };
-  window.app = initApp({ document, storage: window.localStorage, notify });
+  window.app = initApp({ document, storage: window.localStorage, notify, checkSlotsUtc: [[13, 45], [19, 45]] });
 }

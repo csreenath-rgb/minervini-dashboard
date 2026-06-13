@@ -1,39 +1,48 @@
-[
-  {
-    "symbol": "GOOG",
-    "entryPrice": 140
-  },
-  {
-    "symbol": "NOW"
-  },
-  {
-    "symbol": "TQQQ"
-  },
-  {
-    "symbol": "QQQ"
-  },
-  {
-    "symbol": "SOXL"
-  },
-  {
-    "symbol": "ADX"
-  },
-  {
-    "symbol": "MSFT"
-  },
-  {
-    "symbol": "AGQ"
-  },
-  {
-    "symbol": "SOXX"
-  },
-  {
-    "symbol": "RDW"
-  },
-  {
-    "symbol": "AVGO"
-  },
-  {
-    "symbol": "META"
-  }
-]
+{
+  "version": 3,
+  "activeName": "Default",
+  "lists": [
+    {
+      "name": "Default",
+      "items": [
+        {
+          "symbol": "GOOG",
+          "entryPrice": 140
+        },
+        {
+          "symbol": "NOW"
+        },
+        {
+          "symbol": "TQQQ"
+        },
+        {
+          "symbol": "QQQ"
+        },
+        {
+          "symbol": "SOXL"
+        },
+        {
+          "symbol": "ADX"
+        },
+        {
+          "symbol": "MSFT"
+        },
+        {
+          "symbol": "AGQ"
+        },
+        {
+          "symbol": "SOXX"
+        },
+        {
+          "symbol": "RDW"
+        },
+        {
+          "symbol": "AVGO"
+        },
+        {
+          "symbol": "META"
+        }
+      ]
+    }
+  ]
+}

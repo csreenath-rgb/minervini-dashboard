@@ -95,3 +95,162 @@ const BADGES = {
 export function verdictBadge(verdict) {
   return BADGES[verdict] || { label: String(verdict || 'UNKNOWN'), cls: 'neutral' };
 }
+
+/**
+ * Milliseconds from `now` until the next scheduled check slot.
+ * Slots are [hourUTC, minuteUTC] pairs; only weekdays (Mon-Fri) count, so the
+ * in-browser auto-check fires at the SAME times as the server email job.
+ * @param {Date} now
+ * @param {Array<[number, number]>} slots
+ * @returns {number}
+ */
+export function msUntilNextSlot(now, slots) {
+  const mins = slots.map(([h, m]) => h * 60 + m).sort((a, b) => a - b);
+  for (let dayOffset = 0; dayOffset < 8; dayOffset++) {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() + dayOffset);
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue; // skip Saturday/Sunday
+    for (const total of mins) {
+      const slot = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+        Math.floor(total / 60), total % 60, 0, 0);
+      if (slot > now.getTime()) return slot - now.getTime();
+    }
+  }
+  return 24 * 60 * 60 * 1000; // safety fallback
+}
+
+// ---------- named watchlist collections (v3) ----------
+// A collection holds many named lists plus which one is active:
+//   { version:3, activeName, lists:[ { name, items:[{symbol,entryPrice?}], subscribers:[email] } ] }
+
+export function emptyCollection() {
+  return { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [], subscribers: [] }] };
+}
+
+/**
+ * Build a v3 collection from whatever is in storage.
+ * @param {any} parsedNew  parsed value of the v3 collection key (or null)
+ * @param {any} parsedLegacy parsed value of the old single-list array key (or null)
+ */
+export function migrateCollection(parsedNew, parsedLegacy) {
+  if (parsedNew && Array.isArray(parsedNew.lists) && parsedNew.lists.length) {
+    const lists = parsedNew.lists.map((l) => ({
+      name: String(l && l.name != null ? l.name : 'Default'),
+      items: Array.isArray(l && l.items) ? l.items : [],
+      subscribers: Array.isArray(l && l.subscribers) ? l.subscribers : [],
+    }));
+    const activeName = lists.some((l) => l.name === parsedNew.activeName)
+      ? parsedNew.activeName : lists[0].name;
+    return { version: 3, activeName, lists };
+  }
+  if (Array.isArray(parsedLegacy) && parsedLegacy.length) {
+    return { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: parsedLegacy, subscribers: [] }] };
+  }
+  return emptyCollection();
+}
+
+export function listNames(col) {
+  return col.lists.map((l) => l.name);
+}
+
+export function getActiveList(col) {
+  return col.lists.find((l) => l.name === col.activeName) || col.lists[0];
+}
+
+export function getActiveItems(col) {
+  return getActiveList(col).items;
+}
+
+export function setActiveItems(col, items) {
+  const active = getActiveList(col).name;
+  return { ...col, lists: col.lists.map((l) => (l.name === active ? { ...l, items } : l)) };
+}
+
+/**
+ * A list name is valid when it is non-blank and not a case-insensitive duplicate
+ * of another list (excludeName lets a list keep its own name during rename).
+ */
+export function isValidListName(col, name, excludeName = null) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  return !col.lists.some((l) => l.name.toLowerCase() === n.toLowerCase() && l.name !== excludeName);
+}
+
+export function createWatchlist(col, name) {
+  const n = String(name || '').trim();
+  if (!isValidListName(col, n)) return col;
+  return { ...col, activeName: n, lists: [...col.lists, { name: n, items: [], subscribers: [] }] };
+}
+
+export function setActiveWatchlist(col, name) {
+  return col.lists.some((l) => l.name === name) ? { ...col, activeName: name } : col;
+}
+
+export function renameWatchlist(col, oldName, newName) {
+  const n = String(newName || '').trim();
+  if (!col.lists.some((l) => l.name === oldName)) return col;
+  if (!isValidListName(col, n, oldName)) return col;
+  return {
+    ...col,
+    activeName: col.activeName === oldName ? n : col.activeName,
+    lists: col.lists.map((l) => (l.name === oldName ? { ...l, name: n } : l)),
+  };
+}
+
+export function deleteWatchlist(col, name) {
+  if (col.lists.length <= 1) return col; // never delete the last list
+  if (!col.lists.some((l) => l.name === name)) return col;
+  const lists = col.lists.filter((l) => l.name !== name);
+  const activeName = col.activeName === name ? lists[0].name : col.activeName;
+  return { ...col, activeName, lists };
+}
+
+// ---------- subscribers (mailing lists per watchlist) ----------
+export function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function mapList(col, listName, fn) {
+  if (!col.lists.some((l) => l.name === listName)) return col;
+  return { ...col, lists: col.lists.map((l) => (l.name === listName ? fn(l) : l)) };
+}
+
+export function addSubscriber(col, listName, email) {
+  const e = String(email || '').trim();
+  if (!isValidEmail(e)) return col;
+  return mapList(col, listName, (l) => {
+    if (l.subscribers.some((s) => s.toLowerCase() === e.toLowerCase())) return l; // dedupe
+    return { ...l, subscribers: [...l.subscribers, e] };
+  });
+}
+
+export function removeSubscriber(col, listName, email) {
+  const e = String(email || '').trim().toLowerCase();
+  return mapList(col, listName, (l) => ({
+    ...l, subscribers: l.subscribers.filter((s) => s.toLowerCase() !== e),
+  }));
+}
+
+export function updateSubscriber(col, listName, oldEmail, newEmail) {
+  const n = String(newEmail || '').trim();
+  if (!isValidEmail(n)) return col;
+  const oldLc = String(oldEmail || '').trim().toLowerCase();
+  return mapList(col, listName, (l) => {
+    if (!l.subscribers.some((s) => s.toLowerCase() === oldLc)) return l;
+    if (l.subscribers.some((s) => s.toLowerCase() === n.toLowerCase() && s.toLowerCase() !== oldLc)) return l; // dup
+    return { ...l, subscribers: l.subscribers.map((s) => (s.toLowerCase() === oldLc ? n : s)) };
+  });
+}
+
+/** Public, committable form: list names + symbols only, NO email addresses. */
+export function exportPublicWatchlist(col) {
+  return { version: 3, activeName: col.activeName, lists: col.lists.map(({ name, items }) => ({ name, items })) };
+}
+
+/** Private form for the Actions secret: { listName: [emails] }, empty lists omitted. */
+export function exportMailingLists(col) {
+  const out = {};
+  for (const l of col.lists) if (l.subscribers.length) out[l.name] = [...l.subscribers];
+  return out;
+}

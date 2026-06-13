@@ -3,8 +3,9 @@
 A free, serverless stock/ETF analysis dashboard implementing the methodology from Mark Minervini's
 *Trade Like a Stock Market Wizard* (SEPA®). Type a ticker and get: the 8-point Trend Template
 checklist, an entry verdict with pivot buy point and buy zone, a stop-loss level, an exit verdict,
-a fundamentals check, and a chart with all key levels. Save tickers to a watchlist for automatic
-entry/exit alerts — in-browser while the page is open, and by email on a schedule via GitHub Actions.
+a fundamentals check, and a chart with all key levels. Organize tickers into multiple named watchlists, each with its own email subscriber list, for
+automatic entry/exit alerts — in-browser while the page is open, and by email on a schedule via
+GitHub Actions. A one-click button clears and resets on-screen alerts.
 
 **Live dashboard:** enable GitHub Pages on this repository (see Setup) and open the published URL.
 
@@ -31,6 +32,24 @@ suggestion at +20% (sell into strength), with the stop raised to breakeven or be
 accelerating), revenue growth, and profit-margin trend, from Yahoo's quarterly time series.
 ETFs skip this section automatically.
 
+## Watchlists, alerts & subscribers
+
+- **Multiple named watchlists.** Create, rename, switch between, and delete lists from the dashboard.
+  Adding a ticker or checking prices acts on the currently selected list. Your existing single
+  watchlist is migrated automatically into a list called "Default".
+- **Per-list email subscribers.** Each watchlist carries its own list of subscriber email addresses
+  (add / edit / delete in the dashboard). When that list triggers, the scheduled job emails its
+  subscribers. A list with no subscribers falls back to the owner (`MAIL_TO`).
+- **Clear & reset alerts.** A button wipes the on-screen alert banners and resets the de-duplication
+  memory, so a still-valid trigger can surface again on the next check.
+- **Twice-daily checks.** The in-browser page checks your active list at the same times as the email
+  job (about 9:45am and 3:45pm US Eastern on weekdays) plus once when you open the page — instead of
+  polling every few minutes.
+- **Privacy split.** Subscriber emails never go in the public repo. The dashboard offers two exports:
+  **Copy watchlist JSON (public)** → commit into `watchlist.json` (symbols only); and
+  **Copy mailing-lists JSON (private)** → paste into the private Actions secret `MAILING_LISTS`
+  (it contains email addresses, so it must never be committed).
+
 ## Architecture
 
 Everything runs client-side on GitHub Pages — no server, no API keys, no accounts.
@@ -40,13 +59,13 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `index.html` | dashboard UI |
 | `js/engine.js` | analysis engine (pure functions, identical in browser and Node) |
 | `js/data.js` | Yahoo Finance fetcher; direct first, then CORS proxies in order |
-| `js/app-core.js` | watchlist/alert logic (pure, unit-tested) |
-| `js/app.js` | DOM wiring, localStorage watchlist, 5-minute alert loop, notifications |
+| `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
+| `js/app.js` | DOM wiring, localStorage watchlist collection, twice-daily alert loop, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
 | `scripts/send_email.py` | emails triggered alerts (Gmail SMTP, stdlib only) |
 | `.github/workflows/alerts.yml` | cron: twice each trading day + manual trigger |
 | `.github/workflows/ci.yml` | runs the full test suite on every push |
-| `watchlist.json` | watchlist used by the email job |
+| `watchlist.json` | named watchlist collection used by the email job (symbols only, no emails) |
 
 ## Setup
 
@@ -57,9 +76,12 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
    - Create a Gmail *app password*: Google Account → Security → 2-Step Verification → App passwords.
    - Repository Settings → Secrets and variables → Actions → add secrets
      `GMAIL_ADDRESS` (your Gmail), `GMAIL_APP_PASSWORD` (the app password), and optionally
-     `MAIL_TO` (recipient, defaults to `GMAIL_ADDRESS`).
+     `MAIL_TO` (owner fallback recipient, defaults to `GMAIL_ADDRESS`).
+   - For per-list subscribers, also add a secret named `MAILING_LISTS` — paste the dashboard's
+     **"Copy mailing-lists JSON (private)"** output (a JSON object of `{ "List name": ["email", ...] }`).
+     This secret holds email addresses and must never be committed to the repo.
    - Edit `watchlist.json` with the tickers to monitor. The dashboard's
-     **"Copy watchlist JSON"** button produces exactly this content from your in-browser watchlist.
+     **"Copy watchlist JSON (public)"** button produces exactly this content (symbols only).
    - Test it: Actions tab → *Watchlist alerts* → *Run workflow*. With no triggers it logs
      "no alerts triggered"; with triggers it emails you.
 
@@ -67,12 +89,13 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 
 The in-browser watchlist lives in your browser's localStorage. The email job reads `watchlist.json`
 from the repo. A public static page cannot write to GitHub without exposing a token, so syncing is
-manual by design: click **Copy watchlist JSON** in the dashboard, then paste into `watchlist.json`
-on github.com. Takes ~20 seconds, only needed when your watchlist changes.
+manual by design: click **Copy watchlist JSON (public)** in the dashboard, then paste into
+`watchlist.json` on github.com. To update subscribers, click **Copy mailing-lists JSON (private)**
+and paste into the `MAILING_LISTS` Actions secret. Each takes ~20 seconds, only when things change.
 
 ## Testing
 
-Built test-first (TDD). 60+ tests: engine unit tests (every Trend Template criterion exercised
+Built test-first (TDD). 90+ tests: engine unit tests (every Trend Template criterion exercised
 individually, VCP detection, stops, exits, fundamentals, edge cases), integration tests (proxy
 fallback, fixture-backed pipeline, live smoke test), and headless DOM end-to-end tests (jsdom).
 Moving-average / 52-week / RS math is cross-verified against pandas to full float precision.

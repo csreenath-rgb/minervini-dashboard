@@ -59,8 +59,10 @@
   #chart-wrap { height: 360px; position: relative; }
   footer { padding: 18px 24px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border);
            margin-top: 24px; }
-  #watchlist-json { display: none; width: 100%; height: 110px; margin-top: 10px;
+  #watchlist-json, #mailing-json { display: none; width: 100%; height: 110px; margin-top: 10px;
                     font-family: ui-monospace, monospace; font-size: 13px; }
+  #subscribers .watch-row { justify-content: space-between; }
+  .hint-private { color: var(--warn-fg); }
 </style>
 </head>
 <body>
@@ -75,6 +77,9 @@
 </header>
 
 <main>
+  <div id="alerts-toolbar" class="controls" style="display:none; justify-content:flex-end">
+    <button id="clear-alerts-btn">Clear &amp; reset alerts</button>
+  </div>
   <div id="alerts"></div>
 
   <section class="panel">
@@ -113,17 +118,35 @@
   </div>
 
   <section class="panel">
-    <h2>Watchlist <span class="muted" style="text-transform:none">— checked every 5 minutes while this page is open; alerts pop up when entry/exit triggers</span></h2>
+    <h2>Watchlists <span class="muted" style="text-transform:none">— each list checked twice each trading day (and when you open this page); alerts pop up when entry/exit triggers</span></h2>
+    <div class="controls" style="margin-bottom:14px">
+      <label for="watchlist-select" class="muted">List:</label>
+      <select id="watchlist-select"></select>
+      <button id="new-watchlist-btn">+ New list</button>
+      <button id="rename-watchlist-btn">Rename</button>
+      <button id="delete-watchlist-btn">Delete</button>
+    </div>
     <div id="watchlist"></div>
-    <div class="controls" style="margin-top:12px">
+
+    <section class="panel" style="margin-top:14px; background:#0d1117">
+      <h2>Subscribers for this list <span class="muted" style="text-transform:none">— emailed when this list triggers</span></h2>
+      <div id="subscribers"></div>
+      <div class="controls" style="margin-top:10px">
+        <input id="subscriber-input" type="email" placeholder="name@example.com" style="width:260px">
+        <button id="add-subscriber-btn">Add email</button>
+      </div>
+    </section>
+
+    <div class="controls" style="margin-top:14px">
       <button id="refresh-btn">Check now</button>
-      <button id="copy-watchlist-btn">Copy watchlist JSON (for email alerts)</button>
+      <button id="copy-watchlist-btn">Copy watchlist JSON (public)</button>
+      <button id="copy-mailing-btn">Copy mailing-lists JSON (private)</button>
       <span id="last-refresh" class="muted"></span>
     </div>
     <textarea id="watchlist-json" readonly spellcheck="false"></textarea>
-    <p class="muted">For email alerts when this page is closed: copy the JSON above into
-      <code>watchlist.json</code> in your GitHub repository (edit it directly on github.com).
-      A scheduled job checks it twice each trading day and emails you on triggers.</p>
+    <textarea id="mailing-json" readonly spellcheck="false"></textarea>
+    <p class="muted"><strong>Public watchlist JSON</strong> — commit into <code>watchlist.json</code> in your GitHub repository (symbols and list names only, no email addresses).
+      <br><strong class="hint-private">Private mailing-lists JSON</strong> — paste into the repository <em>Actions secret</em> named <code>MAILING_LISTS</code> (Settings &rarr; Secrets and variables &rarr; Actions). It contains email addresses, so <strong>do not commit it</strong>. The scheduled job checks each list twice per trading day and emails that list's subscribers on triggers; lists with no subscribers fall back to the dashboard owner.</p>
   </section>
 </main>
 
