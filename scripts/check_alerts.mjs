@@ -11,6 +11,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { analyzeTicker } from '../js/engine.js';
 import { fetchTickerBundle } from '../js/data.js';
 
+const DEFAULT_DASHBOARD_URL = 'https://csreenath-rgb.github.io/minervini-dashboard/';
+
 /**
  * Flatten any supported watchlist shape into entries tagged with their list name.
  * Accepts a legacy flat array OR a v3 collection { lists:[{name, items:[...]}] }.
@@ -90,7 +92,7 @@ export async function checkWatchlist(input, { fetchImpl } = {}) {
  * Build the alert email, or null when there is nothing to send.
  * @param {Array<{symbol: string, type: string, message: string, price: number}>} alerts
  */
-export function buildEmail(alerts) {
+export function buildEmail(alerts, dashboardUrl = DEFAULT_DASHBOARD_URL) {
   if (!alerts || alerts.length === 0) return null;
   const subject = `Minervini dashboard: ${alerts.length} alert${alerts.length > 1 ? 's' : ''} triggered`;
   const lines = alerts.map((a) => `[${a.type}] ${a.symbol} @ ${a.price.toFixed(2)}\n  ${a.message}`);
@@ -99,7 +101,7 @@ export function buildEmail(alerts) {
     '',
     ...lines,
     '',
-    'Open your dashboard for full analysis.',
+    `Open your dashboard for full analysis: ${dashboardUrl}`,
     '',
     'This is an automated tool implementing one published methodology — not financial advice.',
   ].join('\n');
@@ -124,7 +126,7 @@ export function resolveRecipients(listName, mailingLists, fallback) {
  * @param {Record<string,string[]>} mailingLists  { listName: [emails] }
  * @param {string|null} fallback owner address used when a list has no subscribers
  */
-export function buildEmailGroups(alerts, mailingLists = {}, fallback = null) {
+export function buildEmailGroups(alerts, mailingLists = {}, fallback = null, dashboardUrl = DEFAULT_DASHBOARD_URL) {
   if (!alerts || !alerts.length) return [];
   const byList = new Map();
   for (const a of alerts) {
@@ -141,7 +143,7 @@ export function buildEmailGroups(alerts, mailingLists = {}, fallback = null) {
     const lines = group.map((a) => `[${a.type}] ${a.symbol} @ ${a.price.toFixed(2)}\n  ${a.message}`);
     const body = [
       `The scheduled check of watchlist "${listName ?? 'watchlist'}" triggered the following alerts:`,
-      '', ...lines, '', 'Open your dashboard for full analysis.', '',
+      '', ...lines, '', `Open your dashboard for full analysis: ${dashboardUrl}`, '',
       'This is an automated tool implementing one published methodology — not financial advice.',
     ].join('\n');
     groups.push({ watchlist: listName, recipients, subject, body });
@@ -160,8 +162,9 @@ if (isMain) {
   catch { mailingLists = {}; }
   const fallback = process.env.MAIL_TO || process.env.GMAIL_ADDRESS || null;
   const out = await checkWatchlist(watchlist);
-  const emails = buildEmailGroups(out.alerts, mailingLists, fallback);
-  const email = buildEmail(out.alerts); // legacy combined form (kept for back-compat)
+  const dashboardUrl = process.env.DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
+  const emails = buildEmailGroups(out.alerts, mailingLists, fallback, dashboardUrl);
+  const email = buildEmail(out.alerts, dashboardUrl); // legacy combined form (kept for back-compat)
   writeFileSync(outputPath, JSON.stringify({ ...out, emails, email }, null, 2));
   process.stdout.write(`Checked ${out.results.length} symbols, ${out.alerts.length} alerts in ${emails.length} email group(s).\n`);
 }

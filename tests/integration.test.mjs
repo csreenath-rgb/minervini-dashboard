@@ -238,3 +238,23 @@ describe('check_alerts multi-list + recipient resolution', async () => {
     assert.equal(mod.buildEmailGroups([], {}, 'owner@z.com').length, 0);
   });
 });
+
+// ===== Dashboard link in alert emails (appended, TDD) =====
+describe('alert emails include a dashboard link', async () => {
+  const mod = await import('../scripts/check_alerts.mjs');
+  const URLRE = /https?:\/\/[^\s]*github\.io\/minervini-dashboard/;
+  test('legacy buildEmail body contains the dashboard URL', () => {
+    const email = mod.buildEmail([{ symbol: 'AAPL', type: 'ENTRY', message: 'm', price: 1 }]);
+    assert.match(email.body, URLRE);
+  });
+  test('buildEmailGroups body contains the dashboard URL', () => {
+    const groups = mod.buildEmailGroups(
+      [{ symbol: 'AAPL', type: 'ENTRY', message: 'm', price: 1, watchlist: 'A' }],
+      { A: ['a@x.com'] }, 'owner@z.com');
+    assert.match(groups[0].body, URLRE);
+  });
+  test('dashboard URL is overridable via argument', () => {
+    const email = mod.buildEmail([{ symbol: 'AAPL', type: 'ENTRY', message: 'm', price: 1 }], 'https://example.test/x');
+    assert.match(email.body, /https:\/\/example\.test\/x/);
+  });
+});
