@@ -1,5 +1,39 @@
 [
-  { "symbol": "AAPL" },
-  { "symbol": "NVDA" },
-  { "symbol": "SPY", "entryPrice": 450 }
+  {
+    "symbol": "GOOG",
+    "entryPrice": 140
+  },
+  {
+    "symbol": "NOW"
+  },
+  {
+    "symbol": "TQQQ"
+  },
+  {
+    "symbol": "QQQ"
+  },
+  {
+    "symbol": "SOXL"
+  },
+  {
+    "symbol": "ADX"
+  },
+  {
+    "symbol": "MSFT"
+  },
+  {
+    "symbol": "AGQ"
+  },
+  {
+    "symbol": "SOXX"
+  },
+  {
+    "symbol": "RDW"
+  },
+  {
+    "symbol": "AVGO"
+  },
+  {
+    "symbol": "META"
+  }
 ]
