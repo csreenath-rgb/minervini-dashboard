@@ -42,9 +42,14 @@ ETFs skip this section automatically.
   subscribers. A list with no subscribers falls back to the owner (`MAIL_TO`).
 - **Clear & reset alerts.** A button wipes the on-screen alert banners and resets the de-duplication
   memory, so a still-valid trigger can surface again on the next check.
-- **Twice-daily checks.** The in-browser page checks your active list at the same times as the email
-  job (about 9:45am and 3:45pm US Eastern on weekdays) plus once when you open the page — instead of
-  polling every few minutes.
+- **Per-list check schedule.** Each watchlist can use one of three modes (the dashboard honors them
+  faithfully; lists you don't change keep the twice-daily default):
+  - *Default* — twice each trading day (13:45 & 19:45 UTC, ~9:45am & 3:45pm ET).
+  - *Every N minutes* — the open dashboard re-checks that list every N minutes (minimum 5). Because
+    GitHub Actions cron is coarse, **email** for interval lists is sent at the two default daily slots.
+  - *Specific times* — pick from preset daily slots (13:45 / 16:45 / 19:45 UTC); the dashboard checks at
+    those times and email fires at exactly those slots.
+  The open dashboard checks **all** your lists on their own schedules, not just the one on screen.
 - **Privacy split.** Subscriber emails never go in the public repo. The dashboard offers two exports:
   **Copy watchlist JSON (public)** → commit into `watchlist.json` (symbols only); and
   **Copy mailing-lists JSON (private)** → paste into the private Actions secret `MAILING_LISTS`
@@ -60,10 +65,10 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `js/engine.js` | analysis engine (pure functions, identical in browser and Node) |
 | `js/data.js` | Yahoo Finance fetcher; direct first, then CORS proxies in order |
 | `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
-| `js/app.js` | DOM wiring, localStorage watchlist collection, twice-daily alert loop, notifications |
+| `js/app.js` | DOM wiring, localStorage watchlist collection, per-list check scheduler, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
 | `scripts/send_email.py` | emails triggered alerts (Gmail SMTP, stdlib only) |
-| `.github/workflows/alerts.yml` | cron: twice each trading day + manual trigger |
+| `.github/workflows/alerts.yml` | cron: preset daily slots (13:45/16:45/19:45 UTC) + manual trigger |
 | `.github/workflows/ci.yml` | runs the full test suite on every push |
 | `watchlist.json` | named watchlist collection used by the email job (symbols only, no emails) |
 
@@ -95,7 +100,7 @@ and paste into the `MAILING_LISTS` Actions secret. Each takes ~20 seconds, only 
 
 ## Testing
 
-Built test-first (TDD). 90+ tests: engine unit tests (every Trend Template criterion exercised
+Built test-first (TDD). 100+ tests: engine unit tests (every Trend Template criterion exercised
 individually, VCP detection, stops, exits, fundamentals, edge cases), integration tests (proxy
 fallback, fixture-backed pipeline, live smoke test), and headless DOM end-to-end tests (jsdom).
 Moving-average / 52-week / RS math is cross-verified against pandas to full float precision.
@@ -111,8 +116,9 @@ CI runs the same suite on every push.
 
 Free public CORS proxies can rate-limit or go down (three fallbacks are tried in order); Yahoo data
 is delayed ~15 minutes; the RS rating is an approximation; automated VCP detection is conservative
-and shows its work so you can judge the base yourself; GitHub cron timing is best-effort and shifts
-one hour with US daylight saving.
+and shows its work so you can judge the base yourself; GitHub cron timing is best-effort (runs may be delayed and occasionally skipped) and shifts one hour
+with US daylight saving, so email alert times are approximate; the in-browser schedule is exact while
+the page is open. Email runs only at the preset daily slots, not arbitrary minutes.
 
 ## Disclaimer
 

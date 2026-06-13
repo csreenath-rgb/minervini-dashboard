@@ -2,9 +2,11 @@ name: Watchlist alerts
 
 on:
   schedule:
-    # Twice each trading day (approx. 9:45am and 3:45pm US Eastern during DST).
-    # GitHub cron is UTC; during winter (EST) these run at 8:45am/2:45pm ET.
+    # Preset daily slots in UTC; each watchlist picks which it wants.
+    # ~9:45am / 12:45pm / 3:45pm ET in summer (one hour earlier in winter).
+    # Cron is best-effort and may run late. SLOT_CRON tells the script which slot fired.
     - cron: '45 13 * * 1-5'
+    - cron: '45 16 * * 1-5'
     - cron: '45 19 * * 1-5'
   workflow_dispatch: {}
 
@@ -25,6 +27,7 @@ jobs:
         env:
           MAILING_LISTS: ${{ secrets.MAILING_LISTS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
+          SLOT_CRON: ${{ github.event.schedule }}
         run: node scripts/check_alerts.mjs watchlist.json alerts.json
 
       - name: Email triggered alerts

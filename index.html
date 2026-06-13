@@ -137,6 +137,28 @@
       </div>
     </section>
 
+    <section class="panel" style="margin-top:14px; background:#0d1117">
+      <h2>Check schedule for this list <span class="muted" style="text-transform:none">— how often this list is checked</span></h2>
+      <div class="controls">
+        <label for="schedule-mode" class="muted">Mode:</label>
+        <select id="schedule-mode">
+          <option value="default">Default (twice daily)</option>
+          <option value="interval">Every N minutes</option>
+          <option value="times">Specific times</option>
+        </select>
+        <span id="schedule-interval-group" style="display:none">
+          every <input id="schedule-interval" type="number" min="5" step="5" value="30" style="width:80px"> minutes
+        </span>
+        <span id="schedule-times-group" style="display:none">
+          <label class="muted"><input type="checkbox" class="schedule-time" value="13:45"> 09:45 ET</label>
+          <label class="muted"><input type="checkbox" class="schedule-time" value="16:45"> 12:45 ET</label>
+          <label class="muted"><input type="checkbox" class="schedule-time" value="19:45"> 15:45 ET</label>
+        </span>
+        <button id="save-schedule-btn">Save schedule</button>
+      </div>
+      <p id="schedule-summary" class="muted"></p>
+    </section>
+
     <div class="controls" style="margin-top:14px">
       <button id="refresh-btn">Check now</button>
       <button id="copy-watchlist-btn">Copy watchlist JSON (public)</button>

@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { analyzeTicker } from '../js/engine.js';
 import { fetchTickerBundle } from '../js/data.js';
+import { isListDueAtSlot } from '../js/app-core.js';
 
 const DEFAULT_DASHBOARD_URL = 'https://csreenath-rgb.github.io/minervini-dashboard/';
 
@@ -19,12 +20,14 @@ const DEFAULT_DASHBOARD_URL = 'https://csreenath-rgb.github.io/minervini-dashboa
  */
 export function normalizeWatchlist(input) {
   if (Array.isArray(input)) {
-    return input.map((it) => ({ symbol: it.symbol, entryPrice: it.entryPrice, list: null }));
+    return input.map((it) => ({ symbol: it.symbol, entryPrice: it.entryPrice, list: null, schedule: { mode: 'default' } }));
   }
   if (input && Array.isArray(input.lists)) {
     const out = [];
     for (const l of input.lists) {
-      for (const it of (l.items || [])) out.push({ symbol: it.symbol, entryPrice: it.entryPrice, list: l.name });
+      for (const it of (l.items || [])) {
+        out.push({ symbol: it.symbol, entryPrice: it.entryPrice, list: l.name, schedule: l.schedule || { mode: 'default' } });
+      }
     }
     return out;
   }
@@ -48,6 +51,14 @@ function triggersFor(symbol, r) {
   return out;
 }
 
+/** Map a GitHub Actions cron expression ("M H * * D") to an "HH:MM" slot, or null. */
+export function cronToSlot(cron) {
+  if (!cron) return null;
+  const p = String(cron).trim().split(/\s+/);
+  if (p.length < 2) return null;
+  return `${p[1].padStart(2, '0')}:${p[0].padStart(2, '0')}`;
+}
+
 /**
  * Analyze every watchlist entry and derive triggered alerts. Each symbol is
  * analyzed at most once per run (cached) even if it appears on several lists;
@@ -55,7 +66,7 @@ function triggersFor(symbol, r) {
  * @param {Array<{symbol:string, entryPrice?:number}> | {lists:Array}} input
  * @param {{fetchImpl?: typeof fetch}} opts
  */
-export async function checkWatchlist(input, { fetchImpl } = {}) {
+export async function checkWatchlist(input, { fetchImpl, slot = null } = {}) {
   const entries = normalizeWatchlist(input);
   const results = [];
   const alerts = [];
@@ -64,6 +75,7 @@ export async function checkWatchlist(input, { fetchImpl } = {}) {
   for (const entry of entries) {
     const symbol = String(entry.symbol || '').toUpperCase().trim();
     if (!symbol) continue;
+    if (slot && !isListDueAtSlot(entry.schedule, slot)) continue; // not this list's slot
     const key = `${symbol}|${entry.entryPrice ?? ''}`;
     try {
       let r = cache.get(key);
@@ -161,7 +173,8 @@ if (isMain) {
   try { mailingLists = process.env.MAILING_LISTS ? JSON.parse(process.env.MAILING_LISTS) : {}; }
   catch { mailingLists = {}; }
   const fallback = process.env.MAIL_TO || process.env.GMAIL_ADDRESS || null;
-  const out = await checkWatchlist(watchlist);
+  const slot = cronToSlot(process.env.SLOT_CRON);
+  const out = await checkWatchlist(watchlist, { slot });
   const dashboardUrl = process.env.DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
   const emails = buildEmailGroups(out.alerts, mailingLists, fallback, dashboardUrl);
   const email = buildEmail(out.alerts, dashboardUrl); // legacy combined form (kept for back-compat)

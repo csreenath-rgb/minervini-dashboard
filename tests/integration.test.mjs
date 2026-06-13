@@ -258,3 +258,45 @@ describe('alert emails include a dashboard link', async () => {
     assert.match(email.body, /https:\/\/example\.test\/x/);
   });
 });
+
+// ===== Sched Phase 2: per-list email slot filtering (appended, TDD) =====
+describe('check_alerts slot filtering by schedule', async () => {
+  const mod = await import('../scripts/check_alerts.mjs');
+  const coreP = await import('../js/app-core.js');
+  const fxFetch = async (url) => {
+    let body;
+    if (url.includes('%5EGSPC')) body = fixture('chart_GSPC.json');
+    else if (url.includes('fundamentals-timeseries')) body = fixture('fundamentals_AAPL.json');
+    else if (url.includes('/SPY?')) body = fixture('chart_SPY.json');
+    else body = fixture('chart_AAPL.json');
+    return { ok: true, status: 200, json: async () => body };
+  };
+  const collection = {
+    version: 3, activeName: 'A', lists: [
+      { name: 'A', schedule: { mode: 'times', times: ['16:45'] }, items: [{ symbol: 'SPY', entryPrice: 1 }] },
+      { name: 'B', items: [{ symbol: 'AAPL' }] }, // default -> 13:45 & 19:45
+    ],
+  };
+  test('cronToSlot maps a cron expression to HH:MM (or null)', () => {
+    assert.equal(mod.cronToSlot('45 13 * * 1-5'), '13:45');
+    assert.equal(mod.cronToSlot('45 16 * * 1-5'), '16:45');
+    assert.equal(mod.cronToSlot(''), null);
+    assert.equal(mod.cronToSlot(undefined), null);
+  });
+  test('only lists due at the slot are checked', async () => {
+    const r13 = await mod.checkWatchlist(collection, { fetchImpl: fxFetch, slot: '13:45' });
+    assert.deepEqual(r13.results.map((x) => x.symbol).sort(), ['AAPL']); // B only
+    const r16 = await mod.checkWatchlist(collection, { fetchImpl: fxFetch, slot: '16:45' });
+    assert.deepEqual(r16.results.map((x) => x.symbol).sort(), ['SPY']);  // A only
+  });
+  test('no slot (manual run) checks every list', async () => {
+    const r = await mod.checkWatchlist(collection, { fetchImpl: fxFetch });
+    assert.deepEqual(r.results.map((x) => x.symbol).sort(), ['AAPL', 'SPY']);
+  });
+  test('exportPublicWatchlist carries each list schedule (and no emails)', () => {
+    let c = coreP.setListSchedule(collection, 'A', { mode: 'times', times: ['16:45'] });
+    const pub = coreP.exportPublicWatchlist(c);
+    assert.deepEqual(pub.lists.find((l) => l.name === 'A').schedule, { mode: 'times', times: ['16:45'] });
+    assert.ok(pub.lists.every((l) => !('subscribers' in l)));
+  });
+});

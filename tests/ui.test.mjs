@@ -397,3 +397,131 @@ describe('browser UI: lists & subscribers (jsdom)', async () => {
     assert.ok(pub.lists.every((l) => !('subscribers' in l)));
   });
 });
+
+// ===== Sched Phase 1: per-list schedule core (appended, TDD) =====
+describe('per-list schedule core', async () => {
+  const core = await import('../js/app-core.js');
+  test('preset/default slot constants are sane', () => {
+    assert.deepEqual(core.PRESET_SLOTS, ['13:45', '16:45', '19:45']);
+    assert.deepEqual(core.DEFAULT_EMAIL_SLOTS, ['13:45', '19:45']);
+  });
+  test('normalizeSchedule defaults for missing/invalid input', () => {
+    assert.deepEqual(core.normalizeSchedule(undefined), { mode: 'default' });
+    assert.deepEqual(core.normalizeSchedule({ mode: 'bogus' }), { mode: 'default' });
+    assert.deepEqual(core.normalizeSchedule({ mode: 'interval', intervalMinutes: 2 }), { mode: 'default' }); // <5 -> default
+    assert.deepEqual(core.normalizeSchedule({ mode: 'times', times: ['99:99'] }), { mode: 'default' }); // none valid
+  });
+  test('normalizeSchedule keeps valid interval and preset times', () => {
+    assert.deepEqual(core.normalizeSchedule({ mode: 'interval', intervalMinutes: 30 }), { mode: 'interval', intervalMinutes: 30 });
+    assert.deepEqual(core.normalizeSchedule({ mode: 'times', times: ['19:45', '13:45', '13:45'] }), { mode: 'times', times: ['13:45', '19:45'] });
+  });
+  test('setListSchedule validates and persists; invalid is a no-op', () => {
+    let c = core.createWatchlist(core.migrateCollection(null, [{ symbol: 'AAPL' }]), 'Semis');
+    c = core.setListSchedule(c, 'Semis', { mode: 'interval', intervalMinutes: 15 });
+    assert.deepEqual(core.getListSchedule(core.getActiveList(c)), { mode: 'interval', intervalMinutes: 15 });
+    const c2 = core.setListSchedule(c, 'Semis', { mode: 'times', times: [] }); // invalid -> no-op
+    assert.deepEqual(core.getListSchedule(core.getActiveList(c2)), { mode: 'interval', intervalMinutes: 15 });
+    const c3 = core.setListSchedule(c, 'Semis', { mode: 'times', times: ['13:45', '16:45'] });
+    assert.deepEqual(core.getListSchedule(core.getActiveList(c3)), { mode: 'times', times: ['13:45', '16:45'] });
+  });
+  test('slotsForEmail: times -> own slots; default & interval -> the two default slots', () => {
+    assert.deepEqual(core.slotsForEmail({ mode: 'default' }), ['13:45', '19:45']);
+    assert.deepEqual(core.slotsForEmail({ mode: 'interval', intervalMinutes: 10 }), ['13:45', '19:45']);
+    assert.deepEqual(core.slotsForEmail({ mode: 'times', times: ['16:45'] }), ['16:45']);
+  });
+  test('isListDueAtSlot reflects the email slots', () => {
+    assert.equal(core.isListDueAtSlot({ mode: 'default' }, '13:45'), true);
+    assert.equal(core.isListDueAtSlot({ mode: 'default' }, '16:45'), false);
+    assert.equal(core.isListDueAtSlot({ mode: 'times', times: ['16:45'] }, '16:45'), true);
+    assert.equal(core.isListDueAtSlot({ mode: 'interval', intervalMinutes: 5 }, '19:45'), true);
+  });
+  test('nextDashboardCheckMs: interval -> N minutes; times/default -> next slot', () => {
+    const now = new Date('2026-06-15T10:00:00Z'); // Monday
+    assert.equal(core.nextDashboardCheckMs({ mode: 'interval', intervalMinutes: 20 }, now), 20 * 60000);
+    const at = (ms) => new Date(now.getTime() + ms).toISOString();
+    assert.equal(at(core.nextDashboardCheckMs({ mode: 'default' }, now)), '2026-06-15T13:45:00.000Z');
+    assert.equal(at(core.nextDashboardCheckMs({ mode: 'times', times: ['16:45'] }, now)), '2026-06-15T16:45:00.000Z');
+  });
+});
+
+// ===== Sched Phase 4: scheduler checks non-active lists too (appended, TDD) =====
+describe('per-list scheduler surfaces alerts for any list (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const fetchImpl = async (url) => {
+      let body;
+      if (url.includes('%5EGSPC')) body = fx('chart_GSPC.json');
+      else if (url.includes('fundamentals-timeseries')) body = fx('fundamentals_AAPL.json');
+      else if (url.includes('/SPY')) body = fx('chart_SPY.json');
+      else body = fx('chart_AAPL.json');
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl, notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('checkOneList on a non-active list still shows its alerts, tagged with the list name', async () => {
+    const { dom, app } = await boot();
+    const doc = dom.window.document;
+    app.setWatchlist([{ symbol: 'AAPL' }]);          // Default (active)
+    app.newWatchlist('Trigger');                      // active -> Trigger
+    app.setWatchlist([{ symbol: 'SPY', entryPrice: 1 }]); // SPY into Trigger
+    app.selectWatchlist('Default');                   // active back to Default
+    await app.checkOneList('Trigger');                // scheduler checks the non-active list
+    const txt = doc.getElementById('alerts').textContent;
+    assert.match(txt, /SPY/);
+    assert.match(txt, /Trigger/); // alert is tagged with its list name
+  });
+  test('setScheduleOnActive persists a schedule on the active list', async () => {
+    const { dom, app } = await boot();
+    app.newWatchlist('Fast');
+    app.setScheduleOnActive({ mode: 'interval', intervalMinutes: 15 });
+    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists'));
+    assert.deepEqual(stored.lists.find((l) => l.name === 'Fast').schedule, { mode: 'interval', intervalMinutes: 15 });
+  });
+});
+
+// ===== Sched Phase 5: schedule editor UI (appended, TDD) =====
+describe('schedule editor UI (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') }),
+      notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('index.html declares the schedule controls', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    for (const id of ['schedule-mode', 'schedule-interval', 'schedule-times-group', 'save-schedule-btn', 'schedule-summary']) {
+      assert.ok(html.includes(`id="${id}"`), `missing #${id}`);
+    }
+    assert.ok(html.includes('class="schedule-time"'));
+  });
+  test('saving an interval schedule reflects in the editor and summary', async () => {
+    const { dom, app } = await boot();
+    const doc = dom.window.document;
+    app.newWatchlist('Fast');
+    app.setScheduleOnActive({ mode: 'interval', intervalMinutes: 45 });
+    assert.equal(doc.getElementById('schedule-mode').value, 'interval');
+    assert.match(doc.getElementById('schedule-summary').textContent, /45 minutes/);
+  });
+  test('switching lists shows that list schedule', async () => {
+    const { dom, app } = await boot();
+    const doc = dom.window.document;
+    app.newWatchlist('Times');
+    app.setScheduleOnActive({ mode: 'times', times: ['16:45'] });
+    app.selectWatchlist('Default'); // default schedule
+    assert.equal(doc.getElementById('schedule-mode').value, 'default');
+    app.selectWatchlist('Times');
+    assert.equal(doc.getElementById('schedule-mode').value, 'times');
+    assert.match(doc.getElementById('schedule-summary').textContent, /16:45/);
+  });
+});

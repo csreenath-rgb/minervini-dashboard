@@ -7,7 +7,8 @@ import { analyzeTicker } from './engine.js';
 import { fetchTickerBundle } from './data.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
-  filterNewAlerts, verdictBadge, msUntilNextSlot,
+  filterNewAlerts, verdictBadge,
+  getListSchedule, setListSchedule, nextDashboardCheckMs,
   migrateCollection, getActiveItems, setActiveItems, getActiveList, listNames,
   createWatchlist, setActiveWatchlist, renameWatchlist, deleteWatchlist,
   addSubscriber, removeSubscriber, updateSubscriber, isValidEmail,
@@ -24,13 +25,17 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
  * @param {{document: Document, storage: Storage, fetchImpl?: typeof fetch,
  *          notify?: (title: string, body: string) => void, autoRefreshMs?: number}} deps
  */
-export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 0, checkSlotsUtc = null }) {
+export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 0, autoSchedule = false }) {
   const $ = (id) => doc.getElementById(id);
   const state = {
     lastReport: null,
     seenAlertKeys: new Set(),
     chart: null,
   };
+  const winObj = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+  const setTimer = (winObj && winObj.setTimeout) ? winObj.setTimeout.bind(winObj) : setTimeout;
+  const clearTimer = (winObj && winObj.clearTimeout) ? winObj.clearTimeout.bind(winObj) : clearTimeout;
+  const timers = new Map(); // per-list dashboard check timers
 
   // ---------- watchlist collection persistence ----------
   function getCollection() {
@@ -43,10 +48,12 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   function saveCollection(col) {
     storage.setItem(COLLECTION_KEY, JSON.stringify(col));
     renderAll(col);
+    if (autoSchedule) scheduleAllLists();
   }
   function renderAll(col) {
     renderListSelector(col);
     renderSubscribers(col);
+    renderSchedule(col);
     renderWatchlist(getActiveItems(col));
   }
   // The "active list" is what the rest of the app reads/writes, so the existing
@@ -77,6 +84,10 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   function updateSubscriberOnActive(oldEmail, newEmail) {
     const col = getCollection();
     saveCollection(updateSubscriber(col, getActiveList(col).name, oldEmail, newEmail));
+  }
+  function setScheduleOnActive(schedule) {
+    const col = getCollection();
+    saveCollection(setListSchedule(col, getActiveList(col).name, schedule));
   }
 
   // ---------- rendering ----------
@@ -183,7 +194,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     revealAlertsToolbar();
     const html = alerts.map((a) =>
       `<div class="alert ${a.type === 'ENTRY' ? 'good' : a.type === 'EXIT' ? 'bad' : 'warn'}">
-        <strong>[${esc(a.type)}] ${esc(a.symbol)}</strong> @ ${a.price.toFixed(2)} — ${esc(a.message)}
+        <strong>[${esc(a.type)}] ${esc(a.symbol)}</strong>${a.watchlist ? ` <span class="muted">(${esc(a.watchlist)})</span>` : ''} @ ${a.price.toFixed(2)} — ${esc(a.message)}
       </div>`).join('');
     el.innerHTML = html + el.innerHTML;
     if (notifyUser && notify) {
@@ -219,6 +230,27 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     for (const btn of el.querySelectorAll('.remove-sub')) {
       btn.addEventListener('click', () => api.removeSubscriberFromActive(btn.getAttribute('data-email')));
     }
+  }
+
+  function describeSchedule(s) {
+    if (s.mode === 'interval') return `Every ${s.intervalMinutes} minutes while the dashboard is open. Email alerts use the two default daily slots (13:45 & 19:45 UTC).`;
+    if (s.mode === 'times') return `At ${s.times.join(', ')} UTC, on the dashboard and by email.`;
+    return 'Twice each trading day (default): 13:45 & 19:45 UTC (~9:45am & 3:45pm ET).';
+  }
+
+  function renderSchedule(col) {
+    const modeEl = $('schedule-mode');
+    if (!modeEl) return;
+    const s = getListSchedule(getActiveList(col));
+    modeEl.value = s.mode;
+    const iv = $('schedule-interval');
+    if (iv && s.mode === 'interval') iv.value = s.intervalMinutes;
+    for (const box of doc.querySelectorAll('.schedule-time')) {
+      box.checked = s.mode === 'times' && s.times.includes(box.value);
+    }
+    const ig = $('schedule-interval-group'); if (ig) ig.style.display = s.mode === 'interval' ? 'inline' : 'none';
+    const tg = $('schedule-times-group'); if (tg) tg.style.display = s.mode === 'times' ? 'inline' : 'none';
+    const sum = $('schedule-summary'); if (sum) sum.textContent = describeSchedule(s);
   }
 
   function renderWatchlist(list, statuses = {}) {
@@ -302,11 +334,11 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     return JSON.stringify(exportMailingLists(getCollection()), null, 2);
   }
 
-  async function refreshWatchlist() {
-    const list = getWatchlist();
+  // Check one list's items, surface its alerts (deduped per list+symbol+type+day).
+  async function checkListItems(listName, items, { notifyUser = true } = {}) {
     const statuses = {};
     const today = new Date().toISOString().slice(0, 10);
-    for (const item of list) {
+    for (const item of items) {
       try {
         const bundle = await fetchTickerBundle(item.symbol, { fetchImpl });
         const report = analyzeTicker({
@@ -316,18 +348,56 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
         statuses[item.symbol] = {
           price: report.price, entryVerdict: report.entry.verdict, exitVerdict: report.exit.verdict,
         };
-        const fresh = filterNewAlerts(deriveAlerts(report), state.seenAlertKeys, today);
-        for (const a of fresh) state.seenAlertKeys.add(alertKey(a, today));
-        showAlerts(fresh, { notifyUser: true });
+        const tagged = deriveAlerts(report).map((al) => ({ ...al, watchlist: listName }));
+        const fresh = tagged.filter((al) => !state.seenAlertKeys.has(`${listName}|${alertKey(al, today)}`));
+        for (const al of fresh) state.seenAlertKeys.add(`${listName}|${alertKey(al, today)}`);
+        showAlerts(fresh, { notifyUser });
       } catch (err) {
         statuses[item.symbol] = null;
-        showError(`${item.symbol}: ${err instanceof Error ? err.message : String(err)}`);
+        showError(`${listName ? `${listName}: ` : ''}${item.symbol}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    renderWatchlist(list, statuses);
+    return statuses;
+  }
+
+  function stampChecked() {
     const stamp = $('last-refresh');
     if (stamp) stamp.textContent = `Watchlist last checked: ${new Date().toLocaleTimeString()}`;
+  }
+
+  // "Check now" / programmatic refresh of the ACTIVE list.
+  async function refreshWatchlist() {
+    const active = getActiveList(getCollection());
+    const statuses = await checkListItems(active.name, active.items, { notifyUser: true });
+    renderWatchlist(active.items, statuses);
+    stampChecked();
     return statuses;
+  }
+
+  // Scheduler entry point: check a specific list (may not be the active one).
+  async function checkOneList(name) {
+    const list = getCollection().lists.find((l) => l.name === name);
+    if (!list) return {};
+    const statuses = await checkListItems(name, list.items, { notifyUser: true });
+    if (getActiveList(getCollection()).name === name) { renderWatchlist(list.items, statuses); stampChecked(); }
+    return statuses;
+  }
+
+  // ---------- per-list scheduling (each list on its own cadence) ----------
+  function scheduleList(name) {
+    if (!autoSchedule) return;
+    const old = timers.get(name);
+    if (old) clearTimer(old);
+    const list = getCollection().lists.find((l) => l.name === name);
+    if (!list) { timers.delete(name); return; }
+    const ms = nextDashboardCheckMs(getListSchedule(list), new Date());
+    timers.set(name, setTimer(() => { checkOneList(name).finally(() => scheduleList(name)); }, ms));
+  }
+  function scheduleAllLists() {
+    if (!autoSchedule) return;
+    for (const id of timers.values()) clearTimer(id);
+    timers.clear();
+    for (const l of getCollection().lists) scheduleList(l.name);
   }
 
   // ---------- wiring ----------
@@ -371,20 +441,36 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (!isValidEmail(email)) { showError(`"${email}" is not a valid email address.`); return; }
     addSubscriberToActive(email); inp.value = '';
   });
+  const schedModeEl = $('schedule-mode');
+  if (schedModeEl) schedModeEl.addEventListener('change', () => {
+    const ig = $('schedule-interval-group'); const tg = $('schedule-times-group');
+    if (ig) ig.style.display = schedModeEl.value === 'interval' ? 'inline' : 'none';
+    if (tg) tg.style.display = schedModeEl.value === 'times' ? 'inline' : 'none';
+  });
+  on('save-schedule-btn', () => {
+    const mode = ($('schedule-mode') && $('schedule-mode').value) || 'default';
+    let schedule = { mode: 'default' };
+    if (mode === 'interval') {
+      const n = parseInt($('schedule-interval') && $('schedule-interval').value, 10);
+      if (!Number.isFinite(n) || n < 5) { showError('Check interval must be at least 5 minutes.'); return; }
+      schedule = { mode: 'interval', intervalMinutes: n };
+    } else if (mode === 'times') {
+      const times = [...doc.querySelectorAll('.schedule-time')].filter((b) => b.checked).map((b) => b.value);
+      if (!times.length) { showError('Pick at least one time slot, or use Default.'); return; }
+      schedule = { mode: 'times', times };
+    }
+    setScheduleOnActive(schedule);
+  });
   const input = $('ticker-input');
   if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
 
   renderAll(getCollection());
-  const runAutoCheck = () => { if (getWatchlist().length > 0) refreshWatchlist(); };
-  if (Array.isArray(checkSlotsUtc) && checkSlotsUtc.length) {
-    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
-    const setT = (win && win.setTimeout) ? win.setTimeout.bind(win) : setTimeout;
-    const schedule = () => setT(() => { runAutoCheck(); schedule(); }, msUntilNextSlot(new Date(), checkSlotsUtc));
-    runAutoCheck(); // check once when the page opens
-    schedule();     // then at each daily slot, same times as the email job
+  if (autoSchedule) {
+    for (const l of getCollection().lists) checkOneList(l.name); // check every list once on open
+    scheduleAllLists();                                          // then each on its own cadence
   } else if (autoRefreshMs > 0) {
     setInterval(() => { refreshWatchlist(); }, autoRefreshMs);
-    runAutoCheck();
+    if (getWatchlist().length > 0) refreshWatchlist();
   }
 
   const api = {
@@ -392,6 +478,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
+    checkOneList, setScheduleOnActive,
   };
   return api;
 }
@@ -405,5 +492,5 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.
       Notification.requestPermission().then((p) => { if (p === 'granted') new Notification(title, { body }); });
     }
   };
-  window.app = initApp({ document, storage: window.localStorage, notify, checkSlotsUtc: [[13, 45], [19, 45]] });
+  window.app = initApp({ document, storage: window.localStorage, notify, autoSchedule: true });
 }

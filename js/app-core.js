@@ -135,11 +135,15 @@ export function emptyCollection() {
  */
 export function migrateCollection(parsedNew, parsedLegacy) {
   if (parsedNew && Array.isArray(parsedNew.lists) && parsedNew.lists.length) {
-    const lists = parsedNew.lists.map((l) => ({
-      name: String(l && l.name != null ? l.name : 'Default'),
-      items: Array.isArray(l && l.items) ? l.items : [],
-      subscribers: Array.isArray(l && l.subscribers) ? l.subscribers : [],
-    }));
+    const lists = parsedNew.lists.map((l) => {
+      const out = {
+        name: String(l && l.name != null ? l.name : 'Default'),
+        items: Array.isArray(l && l.items) ? l.items : [],
+        subscribers: Array.isArray(l && l.subscribers) ? l.subscribers : [],
+      };
+      if (l && l.schedule) out.schedule = l.schedule; // preserve per-list schedule
+      return out;
+    });
     const activeName = lists.some((l) => l.name === parsedNew.activeName)
       ? parsedNew.activeName : lists[0].name;
     return { version: 3, activeName, lists };
@@ -245,7 +249,10 @@ export function updateSubscriber(col, listName, oldEmail, newEmail) {
 
 /** Public, committable form: list names + symbols only, NO email addresses. */
 export function exportPublicWatchlist(col) {
-  return { version: 3, activeName: col.activeName, lists: col.lists.map(({ name, items }) => ({ name, items })) };
+  return {
+    version: 3, activeName: col.activeName,
+    lists: col.lists.map((l) => ({ name: l.name, items: l.items, schedule: getListSchedule(l) })),
+  };
 }
 
 /** Private form for the Actions secret: { listName: [emails] }, empty lists omitted. */
@@ -253,4 +260,68 @@ export function exportMailingLists(col) {
   const out = {};
   for (const l of col.lists) if (l.subscribers.length) out[l.name] = [...l.subscribers];
   return out;
+}
+
+// ---------- per-list check schedule ----------
+// Email runs on a fixed menu of preset daily slots (UTC) because GitHub Actions
+// cron is coarse/best-effort. The dashboard honors schedules faithfully in-browser.
+export const PRESET_SLOTS = ['13:45', '16:45', '19:45'];      // UTC; ~9:45/12:45/15:45 ET (EDT)
+export const DEFAULT_EMAIL_SLOTS = ['13:45', '19:45'];        // current twice-daily default
+
+export function parseSlot(s) {
+  const [h, m] = String(s).split(':').map(Number);
+  return [h, m];
+}
+
+/** Coerce any stored schedule into a valid one; fall back to { mode:'default' }. */
+export function normalizeSchedule(s) {
+  if (!s || typeof s !== 'object') return { mode: 'default' };
+  if (s.mode === 'interval') {
+    const n = Number(s.intervalMinutes);
+    return (Number.isFinite(n) && n >= 5) ? { mode: 'interval', intervalMinutes: Math.round(n) } : { mode: 'default' };
+  }
+  if (s.mode === 'times') {
+    const times = Array.isArray(s.times) ? [...new Set(s.times.filter((t) => PRESET_SLOTS.includes(t)))].sort() : [];
+    return times.length ? { mode: 'times', times } : { mode: 'default' };
+  }
+  return { mode: 'default' };
+}
+
+export function getListSchedule(list) {
+  return normalizeSchedule(list && list.schedule);
+}
+
+/** Set a list's schedule (validated). Invalid schedules are a no-op. */
+export function setListSchedule(col, listName, schedule) {
+  if (!schedule || typeof schedule !== 'object') return col;
+  let norm;
+  if (schedule.mode === 'default') norm = { mode: 'default' };
+  else if (schedule.mode === 'interval') {
+    const n = Number(schedule.intervalMinutes);
+    if (!Number.isFinite(n) || n < 5) return col;
+    norm = { mode: 'interval', intervalMinutes: Math.round(n) };
+  } else if (schedule.mode === 'times') {
+    const times = Array.isArray(schedule.times) ? [...new Set(schedule.times.filter((t) => PRESET_SLOTS.includes(t)))].sort() : [];
+    if (!times.length) return col;
+    norm = { mode: 'times', times };
+  } else return col;
+  return mapList(col, listName, (l) => ({ ...l, schedule: norm }));
+}
+
+/** Preset slots at which this list should be emailed. */
+export function slotsForEmail(schedule) {
+  const s = normalizeSchedule(schedule);
+  return s.mode === 'times' ? [...s.times] : [...DEFAULT_EMAIL_SLOTS]; // default + interval -> two default slots
+}
+
+export function isListDueAtSlot(schedule, slot) {
+  return slotsForEmail(schedule).includes(slot);
+}
+
+/** Milliseconds until this list's next in-browser check. */
+export function nextDashboardCheckMs(schedule, now) {
+  const s = normalizeSchedule(schedule);
+  if (s.mode === 'interval') return s.intervalMinutes * 60000;
+  const slots = (s.mode === 'times' ? s.times : DEFAULT_EMAIL_SLOTS).map(parseSlot);
+  return msUntilNextSlot(now, slots);
 }
