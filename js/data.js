@@ -4,6 +4,8 @@
  * static page the direct request is blocked by CORS, so proxies are tried in order.
  */
 
+import { ADAPTERS, quartersToYahooJson } from './providers.js';
+
 const YAHOO = 'https://query1.finance.yahoo.com';
 export const BENCHMARK = '^GSPC';
 
@@ -56,20 +58,58 @@ export async function fetchJsonWithFallback(url, { fetchImpl } = {}) {
   throw new Error(`All data sources failed for ${url}:\n${errors.join('\n')}`);
 }
 
+/** Direct fetch with NO CORS proxy — used for keyed provider requests so a key is never leaked to a proxy. */
+export async function fetchJsonDirect(url, { fetchImpl } = {}) {
+  const f = fetchImpl || fetch;
+  const res = await f(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return res.json();
+}
+
+/** Provider+key from environment (used by the Node email job). */
+export function envFundamentalsConfig() {
+  if (typeof process !== 'undefined' && process.env) {
+    const provider = process.env.FUNDAMENTALS_PROVIDER;
+    const key = process.env.FUNDAMENTALS_API_KEY;
+    if (provider && key) return { provider, key };
+  }
+  return null;
+}
+
+/**
+ * Fetch fundamentals via the configured data provider, falling back to Yahoo.
+ * Returns Yahoo-shaped JSON so the engine parser is unchanged.
+ * @param {string} symbol
+ * @param {{fetchImpl?: typeof fetch, fundamentals?: {provider:string, key?:string}}} opts
+ */
+export async function fetchFundamentals(symbol, { fetchImpl, fundamentals } = {}) {
+  const cfg = fundamentals || envFundamentalsConfig() || { provider: 'yahoo' };
+  const provider = String(cfg.provider || 'yahoo').toLowerCase();
+  const adapter = ADAPTERS[provider];
+  if (adapter && cfg.key) {
+    try {
+      const responses = await Promise.all(adapter.urls(symbol, cfg.key).map((u) => fetchJsonDirect(u, { fetchImpl })));
+      const quarters = adapter.toQuarters(responses);
+      if (quarters && quarters.length >= 5) return quartersToYahooJson(quarters);
+    } catch { /* fall through to Yahoo */ }
+  }
+  return fetchJsonWithFallback(fundamentalsUrl(symbol), { fetchImpl }); // default / fallback
+}
+
 /**
  * Fetch everything needed to analyze one ticker:
  * its chart, the S&P 500 benchmark chart, and (best-effort) fundamentals.
  * @param {string} symbol
  * @param {{fetchImpl?: typeof fetch, range?: string}} opts
  */
-export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y' } = {}) {
+export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', fundamentals } = {}) {
   const [chartJson, benchJson] = await Promise.all([
     fetchJsonWithFallback(chartUrl(symbol, range), { fetchImpl }),
     fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
   ]);
   let fundJson = null;
   try {
-    fundJson = await fetchJsonWithFallback(fundamentalsUrl(symbol), { fetchImpl });
+    fundJson = await fetchFundamentals(symbol, { fetchImpl, fundamentals });
   } catch {
     fundJson = null; // fundamentals are best-effort; technicals must still work
   }

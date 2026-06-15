@@ -28,6 +28,8 @@ jobs:
           MAILING_LISTS: ${{ secrets.MAILING_LISTS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           SLOT_CRON: ${{ github.event.schedule }}
+          FUNDAMENTALS_PROVIDER: ${{ secrets.FUNDAMENTALS_PROVIDER }}
+          FUNDAMENTALS_API_KEY: ${{ secrets.FUNDAMENTALS_API_KEY }}
         run: node scripts/check_alerts.mjs watchlist.json alerts.json
 
       - name: Email triggered alerts

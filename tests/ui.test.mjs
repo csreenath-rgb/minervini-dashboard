@@ -525,3 +525,60 @@ describe('schedule editor UI (jsdom)', async () => {
     assert.match(doc.getElementById('schedule-summary').textContent, /16:45/);
   });
 });
+
+// ===== Fund Phase 3: fundamentals provider/key UI (appended, TDD) =====
+describe('fundamentals provider UI (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })),
+      notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('index.html declares provider controls and the security warning', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    for (const id of ['fund-provider', 'fund-key', 'save-fund-btn', 'fund-status']) {
+      assert.ok(html.includes(`id="${id}"`), `missing #${id}`);
+    }
+    assert.match(html, /never a brokerage account key/i);
+    assert.match(html, /FUNDAMENTALS_API_KEY/);
+  });
+  test('default config is Yahoo; status reflects it', async () => {
+    const { dom, app } = await boot();
+    assert.deepEqual(app.getFundamentalsConfig(), { provider: 'yahoo' });
+    assert.match(dom.window.document.getElementById('fund-status').textContent, /Yahoo/);
+  });
+  test('saving a provider config persists and updates the status line', async () => {
+    const { dom, app } = await boot();
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'K' });
+    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_fundamentals'));
+    assert.deepEqual(stored, { provider: 'fmp', key: 'K' });
+    assert.match(dom.window.document.getElementById('fund-status').textContent, /Modeling Prep/);
+  });
+  test('analyze uses the configured provider for fundamentals', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.includes('financialmodelingprep')) {
+        return { ok: true, status: 200, json: async () => ([
+          { date: '2025-03-31', epsdiluted: 1.65, revenue: 9.5e10, netIncome: 2.4e10 },
+          { date: '2025-06-30', epsdiluted: 1.57, revenue: 9.4e10, netIncome: 2.3e10 },
+          { date: '2025-09-30', epsdiluted: 1.85, revenue: 1.0e11, netIncome: 2.7e10 },
+          { date: '2025-12-31', epsdiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+          { date: '2026-03-31', epsdiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+        ]) };
+      }
+      if (url.includes('%5EGSPC')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'SECRET' });
+    dom.window.document.getElementById('ticker-input').value = 'AAPL';
+    await app.analyze();
+    assert.ok(calls.some((u) => u.includes('financialmodelingprep.com') && u.includes('apikey=SECRET')));
+  });
+});

@@ -17,6 +17,7 @@ import {
 
 const WATCHLIST_KEY = 'minervini_watchlist';        // legacy single-list key (read once for migration)
 const COLLECTION_KEY = 'minervini_watchlists';      // v3 named-collection key
+const FUND_KEY = 'minervini_fundamentals';          // { provider, key } for fundamentals
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
@@ -88,6 +89,27 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   function setScheduleOnActive(schedule) {
     const col = getCollection();
     saveCollection(setListSchedule(col, getActiveList(col).name, schedule));
+  }
+  // ---------- fundamentals data provider ----------
+  const PROVIDER_LABELS = { yahoo: 'Yahoo (free)', finnhub: 'Finnhub', fmp: 'Financial Modeling Prep', alphavantage: 'Alpha Vantage' };
+  function getFundamentalsConfig() {
+    try { const c = JSON.parse(storage.getItem(FUND_KEY)); if (c && c.provider) return c; } catch { /* ignore */ }
+    return { provider: 'yahoo' };
+  }
+  function saveFundamentalsConfig(cfg) { storage.setItem(FUND_KEY, JSON.stringify(cfg)); renderFundamentalsConfig(); }
+  function setFundamentalsConfig(cfg) { saveFundamentalsConfig(cfg); }
+  function renderFundamentalsConfig() {
+    const sel = $('fund-provider'); if (!sel) return;
+    const cfg = getFundamentalsConfig();
+    sel.value = cfg.provider;
+    const keyEl = $('fund-key');
+    if (keyEl) { keyEl.value = cfg.key || ''; keyEl.disabled = cfg.provider === 'yahoo'; }
+    const status = $('fund-status');
+    if (status) {
+      status.textContent = cfg.provider === 'yahoo'
+        ? 'Using Yahoo Finance (free, delayed). Add a provider key for more accurate fundamentals.'
+        : `Using ${PROVIDER_LABELS[cfg.provider] || cfg.provider}${cfg.key ? '' : ' — no key set, will fall back to Yahoo'}. Falls back to Yahoo if the provider is unreachable from the browser.`;
+    }
   }
 
   // ---------- rendering ----------
@@ -286,7 +308,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     try {
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-      const bundle = await fetchTickerBundle(symbol, { fetchImpl });
+      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: getFundamentalsConfig() });
       const report = analyzeTicker({
         chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
         entryPrice: isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
@@ -340,7 +362,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     const today = new Date().toISOString().slice(0, 10);
     for (const item of items) {
       try {
-        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl });
+        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: getFundamentalsConfig() });
         const report = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: item.entryPrice ?? null,
@@ -447,6 +469,16 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (ig) ig.style.display = schedModeEl.value === 'interval' ? 'inline' : 'none';
     if (tg) tg.style.display = schedModeEl.value === 'times' ? 'inline' : 'none';
   });
+  const fundSel = $('fund-provider');
+  if (fundSel) fundSel.addEventListener('change', () => {
+    const keyEl = $('fund-key'); if (keyEl) keyEl.disabled = fundSel.value === 'yahoo';
+  });
+  on('save-fund-btn', () => {
+    const provider = ($('fund-provider') && $('fund-provider').value) || 'yahoo';
+    const key = ($('fund-key') && $('fund-key').value || '').trim();
+    if (provider !== 'yahoo' && !key) { showError('Enter the API key for the selected provider, or choose Yahoo.'); return; }
+    saveFundamentalsConfig(provider === 'yahoo' ? { provider: 'yahoo' } : { provider, key });
+  });
   on('save-schedule-btn', () => {
     const mode = ($('schedule-mode') && $('schedule-mode').value) || 'default';
     let schedule = { mode: 'default' };
@@ -465,6 +497,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
 
   renderAll(getCollection());
+  renderFundamentalsConfig();
   if (autoSchedule) {
     for (const l of getCollection().lists) checkOneList(l.name); // check every list once on open
     scheduleAllLists();                                          // then each on its own cadence
@@ -478,7 +511,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
-    checkOneList, setScheduleOnActive,
+    checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig,
   };
   return api;
 }

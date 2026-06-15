@@ -106,6 +106,23 @@
     <div id="chart-wrap"><canvas id="price-chart"></canvas></div>
   </section>
 
+  <section class="panel">
+    <h2>Fundamental data source <span class="muted" style="text-transform:none">— optional: use a provider API key for more accurate fundamentals</span></h2>
+    <div class="controls">
+      <label for="fund-provider" class="muted">Provider:</label>
+      <select id="fund-provider">
+        <option value="yahoo">Yahoo (free, default)</option>
+        <option value="finnhub">Finnhub</option>
+        <option value="fmp">Financial Modeling Prep</option>
+        <option value="alphavantage">Alpha Vantage</option>
+      </select>
+      <input id="fund-key" type="password" placeholder="API key (read-only data key)" autocomplete="off" style="width:280px">
+      <button id="save-fund-btn">Save</button>
+    </div>
+    <p id="fund-status" class="muted"></p>
+    <p class="muted hint-private">Your key is stored only in this browser and is visible to anyone using this device — use a <strong>read-only data-provider key</strong>, never a brokerage account key. If a provider blocks browser requests, the dashboard falls back to Yahoo. For scheduled <em>email</em> alerts, set the <code>FUNDAMENTALS_PROVIDER</code> and <code>FUNDAMENTALS_API_KEY</code> repository secrets instead (kept fully private).</p>
+  </section>
+
   <div class="grid-2">
     <section class="panel">
       <h2>Minervini Trend Template (8-point Stage-2 test)</h2>

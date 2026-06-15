@@ -63,7 +63,8 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 |---|---|
 | `index.html` | dashboard UI |
 | `js/engine.js` | analysis engine (pure functions, identical in browser and Node) |
-| `js/data.js` | Yahoo Finance fetcher; direct first, then CORS proxies in order |
+| `js/data.js` | data fetching; Yahoo by default, routes fundamentals to a chosen provider |
+| `js/providers.js` | fundamentals adapters (Finnhub / FMP / Alpha Vantage) normalized to the engine shape |
 | `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
 | `js/app.js` | DOM wiring, localStorage watchlist collection, per-list check scheduler, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
@@ -71,6 +72,28 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `.github/workflows/alerts.yml` | cron: preset daily slots (13:45/16:45/19:45 UTC) + manual trigger |
 | `.github/workflows/ci.yml` | runs the full test suite on every push |
 | `watchlist.json` | named watchlist collection used by the email job (symbols only, no emails) |
+
+## Fundamental data providers (optional)
+
+By default fundamentals come from Yahoo (free, delayed, sometimes sparse). For more accurate
+earnings/revenue history you can plug in a dedicated data API. Pick one in the dashboard's
+**Fundamental data source** panel and paste a **read-only data key**:
+
+- **Financial Modeling Prep** — SEC-EDGAR-backed; best for quarterly EPS/revenue history.
+- **Finnhub** — generous free tier; quarterly EPS (revenue/margins need a higher tier).
+- **Alpha Vantage** — simple, but the free quota (~25/day) is tight for a large watchlist.
+
+If no key is set, or a provider can't be reached from the browser, the dashboard falls back to Yahoo
+automatically. Price/chart data always stays on Yahoo.
+
+**Security & scope.** A browser key is stored in your browser's localStorage and is visible to anyone
+using that device — only ever use a *read-only data-provider* key, never a brokerage account key.
+Retail brokerages (Interactive Brokers, Schwab, Vanguard, Merrill) are intentionally **not** supported:
+Vanguard and Merrill have no retail data API, and IBKR/Schwab are OAuth trading APIs that can't be
+called from a static page and don't provide the multi-quarter fundamentals this tool needs.
+
+For the scheduled **email** job, set the key as private repository secrets instead of in the browser:
+`FUNDAMENTALS_PROVIDER` (one of `finnhub` / `fmp` / `alphavantage`) and `FUNDAMENTALS_API_KEY`.
 
 ## Setup
 
@@ -85,6 +108,8 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
    - For per-list subscribers, also add a secret named `MAILING_LISTS` — paste the dashboard's
      **"Copy mailing-lists JSON (private)"** output (a JSON object of `{ "List name": ["email", ...] }`).
      This secret holds email addresses and must never be committed to the repo.
+   - Optional, for higher-quality fundamentals in the email job: add `FUNDAMENTALS_PROVIDER`
+     (`finnhub` / `fmp` / `alphavantage`) and `FUNDAMENTALS_API_KEY` secrets.
    - Edit `watchlist.json` with the tickers to monitor. The dashboard's
      **"Copy watchlist JSON (public)"** button produces exactly this content (symbols only).
    - Test it: Actions tab → *Watchlist alerts* → *Run workflow*. With no triggers it logs
@@ -100,7 +125,7 @@ and paste into the `MAILING_LISTS` Actions secret. Each takes ~20 seconds, only 
 
 ## Testing
 
-Built test-first (TDD). 100+ tests: engine unit tests (every Trend Template criterion exercised
+Built test-first (TDD). 130+ tests: engine unit tests (every Trend Template criterion exercised
 individually, VCP detection, stops, exits, fundamentals, edge cases), integration tests (proxy
 fallback, fixture-backed pipeline, live smoke test), and headless DOM end-to-end tests (jsdom).
 Moving-average / 52-week / RS math is cross-verified against pandas to full float precision.

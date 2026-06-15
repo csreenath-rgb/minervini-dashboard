@@ -300,3 +300,132 @@ describe('check_alerts slot filtering by schedule', async () => {
     assert.ok(pub.lists.every((l) => !('subscribers' in l)));
   });
 });
+
+// ===== Fund Phase 1: provider adapters -> normalized quarters (appended, TDD) =====
+describe('fundamentals provider adapters', async () => {
+  const { fmp, alphavantage, finnhub, quartersToYahooJson, FUNDAMENTALS_PROVIDERS } = await import('../js/providers.js');
+  const { parseYahooFundamentals } = await import('../js/engine.js');
+
+  test('provider list includes yahoo + the three data APIs', () => {
+    assert.deepEqual(FUNDAMENTALS_PROVIDERS, ['yahoo', 'finnhub', 'fmp', 'alphavantage']);
+  });
+
+  test('FMP income-statement rows -> quarters (eps/revenue/netIncome), sorted', () => {
+    const rows = [
+      { date: '2026-03-31', epsdiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+      { date: '2025-12-31', epsdiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+    ];
+    const q = fmp.toQuarters([rows]);
+    assert.deepEqual(q.map((x) => x.date), ['2025-12-31', '2026-03-31']); // ascending
+    assert.equal(q[1].eps, 2.01);
+    assert.equal(q[0].revenue, 1.4e11);
+  });
+
+  test('Alpha Vantage EARNINGS + INCOME_STATEMENT merge by fiscalDateEnding', () => {
+    const earnings = { quarterlyEarnings: [{ fiscalDateEnding: '2026-03-31', reportedEPS: '2.01' }] };
+    const income = { quarterlyReports: [{ fiscalDateEnding: '2026-03-31', totalRevenue: '111000000000', netIncome: '29000000000' }] };
+    const q = alphavantage.toQuarters([earnings, income]);
+    assert.equal(q.length, 1);
+    assert.equal(q[0].eps, 2.01);
+    assert.equal(q[0].revenue, 111000000000);
+    assert.equal(q[0].netIncome, 29000000000);
+  });
+
+  test('Finnhub /stock/earnings -> EPS quarters (revenue/netIncome null on free tier)', () => {
+    const earnings = [
+      { period: '2026-03-31', actual: 2.01 },
+      { period: '2025-12-31', actual: 2.84 },
+    ];
+    const q = finnhub.toQuarters([earnings]);
+    assert.deepEqual(q.map((x) => x.date), ['2025-12-31', '2026-03-31']);
+    assert.equal(q[1].eps, 2.01);
+    assert.equal(q[0].revenue, null);
+  });
+
+  test('round-trip: quartersToYahooJson is read back identically by the engine parser', () => {
+    const q = [
+      { date: '2025-12-31', eps: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+      { date: '2026-03-31', eps: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+    ];
+    assert.deepEqual(parseYahooFundamentals(quartersToYahooJson(q)), q);
+  });
+
+  test('EPS-only quarters (Finnhub) round-trip with null revenue/netIncome dropped cleanly', () => {
+    const q = [{ date: '2026-03-31', eps: 2.01, revenue: null, netIncome: null }];
+    const parsed = parseYahooFundamentals(quartersToYahooJson(q));
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].eps, 2.01);
+    assert.equal(parsed[0].revenue, undefined); // null fields omitted, engine treats as absent
+  });
+});
+
+// ===== Fund Phase 2: data-layer routing + fallback (appended, TDD) =====
+describe('fetchFundamentals routing', async () => {
+  const data = await import('../js/data.js');
+  const { parseYahooFundamentals } = await import('../js/engine.js');
+  const fmpRows = [
+    { date: '2025-03-31', epsdiluted: 1.65, revenue: 9.5e10, netIncome: 2.4e10 },
+    { date: '2025-06-30', epsdiluted: 1.57, revenue: 9.4e10, netIncome: 2.3e10 },
+    { date: '2025-09-30', epsdiluted: 1.85, revenue: 1.0e11, netIncome: 2.7e10 },
+    { date: '2025-12-31', epsdiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+    { date: '2026-03-31', epsdiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+  ];
+  test('provider path returns engine-readable fundamentals and never proxies the keyed URL', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => fmpRows }; };
+    const fj = await data.fetchFundamentals('AAPL', { fetchImpl, fundamentals: { provider: 'fmp', key: 'SECRET' } });
+    assert.equal(parseYahooFundamentals(fj).length, 5);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].includes('financialmodelingprep.com') && calls[0].includes('apikey=SECRET'));
+    assert.ok(!calls[0].includes('corsproxy') && !calls[0].includes('allorigins') && !calls[0].includes('codetabs'));
+  });
+  test('provider failure falls back to Yahoo', async () => {
+    const fetchImpl = async (url) => {
+      if (url.includes('financialmodelingprep')) throw new Error('CORS blocked');
+      return { ok: true, status: 200, json: async () => fixture('fundamentals_AAPL.json') };
+    };
+    const fj = await data.fetchFundamentals('AAPL', { fetchImpl, fundamentals: { provider: 'fmp', key: 'K' } });
+    assert.ok(parseYahooFundamentals(fj).length >= 5);
+  });
+  test('no provider configured uses Yahoo', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => fixture('fundamentals_AAPL.json') }; };
+    await data.fetchFundamentals('AAPL', { fetchImpl });
+    assert.ok(calls[0].includes('fundamentals-timeseries'));
+  });
+  test('provider with too few quarters falls back to Yahoo', async () => {
+    const fetchImpl = async (url) => {
+      if (url.includes('financialmodelingprep')) return { ok: true, status: 200, json: async () => [fmpRows[0]] }; // only 1 quarter
+      return { ok: true, status: 200, json: async () => fixture('fundamentals_AAPL.json') };
+    };
+    const fj = await data.fetchFundamentals('AAPL', { fetchImpl, fundamentals: { provider: 'fmp', key: 'K' } });
+    assert.ok(parseYahooFundamentals(fj).length >= 5); // came from Yahoo fixture
+  });
+});
+
+// ===== Fund Phase 4: email-job env-config path (appended, TDD) =====
+describe('fetchFundamentals env config (email job)', async () => {
+  const data = await import('../js/data.js');
+  const { parseYahooFundamentals } = await import('../js/engine.js');
+  const rows = [
+    { date: '2025-03-31', epsdiluted: 1.65, revenue: 9.5e10, netIncome: 2.4e10 },
+    { date: '2025-06-30', epsdiluted: 1.57, revenue: 9.4e10, netIncome: 2.3e10 },
+    { date: '2025-09-30', epsdiluted: 1.85, revenue: 1.0e11, netIncome: 2.7e10 },
+    { date: '2025-12-31', epsdiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+    { date: '2026-03-31', epsdiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+  ];
+  test('uses FUNDAMENTALS_PROVIDER/KEY env when no explicit config is passed', async () => {
+    process.env.FUNDAMENTALS_PROVIDER = 'fmp';
+    process.env.FUNDAMENTALS_API_KEY = 'ENVKEY';
+    try {
+      const calls = [];
+      const fetchImpl = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => rows }; };
+      const fj = await data.fetchFundamentals('AAPL', { fetchImpl });
+      assert.equal(parseYahooFundamentals(fj).length, 5);
+      assert.ok(calls[0].includes('financialmodelingprep.com') && calls[0].includes('apikey=ENVKEY'));
+    } finally {
+      delete process.env.FUNDAMENTALS_PROVIDER;
+      delete process.env.FUNDAMENTALS_API_KEY;
+    }
+  });
+});
