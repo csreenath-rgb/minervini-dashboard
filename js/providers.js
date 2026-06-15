@@ -65,7 +65,7 @@ export const alphavantage = {
 export const finnhub = {
   needsKey: true,
   attempts: (symbol, key) => [[
-    `https://finnhub.io/api/v1/stock/earnings?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`,
+    `https://finnhub.io/api/v1/stock/earnings?symbol=${encodeURIComponent(symbol)}&limit=16&token=${encodeURIComponent(key)}`,
   ]],
   toQuarters: ([earnings]) => {
     if (!Array.isArray(earnings)) return [];
