@@ -741,3 +741,39 @@ describe('live watchlist refresh + verdict persistence (jsdom)', async () => {
     assert.match(doc.getElementById('watchlist').textContent, /@\d/); // price badge still shown
   });
 });
+
+// ===== Clickable watchlist symbols load the analyzer (appended, TDD) =====
+describe('clickable watchlist symbols (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const fetchImpl = async (url) => {
+      if (url.includes('%5EGSPC')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
+      if (url.includes('fundamentals-timeseries')) return { ok: true, status: 200, json: async () => fx('fundamentals_AAPL.json') };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage, fetchImpl, notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('watchlist renders clickable symbol links', async () => {
+    const { dom, app } = await boot();
+    app.setWatchlist([{ symbol: 'AAPL', entryPrice: 150 }]);
+    const link = dom.window.document.querySelector('#watchlist .link-symbol');
+    assert.ok(link, 'symbol should be a .link-symbol button');
+    assert.equal(link.getAttribute('data-symbol'), 'AAPL');
+  });
+  test('clicking a symbol loads it into the top inputs and runs analysis', async () => {
+    const { dom, app } = await boot();
+    const doc = dom.window.document;
+    app.setWatchlist([{ symbol: 'AAPL', entryPrice: 150 }]);
+    doc.querySelector('#watchlist .link-symbol').dispatchEvent(new dom.window.Event('click'));
+    await new Promise((r) => setTimeout(r, 0)); // let the async analyze settle
+    assert.equal(doc.getElementById('ticker-input').value, 'AAPL');
+    assert.equal(doc.getElementById('entry-price-input').value, '150');
+    assert.match(doc.getElementById('report-title').textContent, /AAPL/);
+    assert.ok(doc.getElementById('verdict-entry').textContent.length > 2);
+  });
+});

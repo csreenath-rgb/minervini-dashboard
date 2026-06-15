@@ -359,12 +359,18 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
            <span class="muted">@${st.price.toFixed(2)}</span>`
         : '<span class="muted">not checked yet</span>';
       return `<div class="watch-row" data-symbol="${esc(item.symbol)}">
-        <strong>${esc(item.symbol)}</strong>
+        <button class="link-symbol" data-symbol="${esc(item.symbol)}"${item.entryPrice != null ? ` data-entry="${esc(String(item.entryPrice))}"` : ''} title="Analyze ${esc(item.symbol)}">${esc(item.symbol)}</button>
         ${item.entryPrice != null ? `<span class="muted">entry ${Number(item.entryPrice).toFixed(2)}</span>` : ''}
         ${stHtml}
         <button class="remove-watch" data-symbol="${esc(item.symbol)}">✕</button>
       </div>`;
     }).join('');
+    for (const b of el.querySelectorAll('.link-symbol')) {
+      b.addEventListener('click', () => {
+        const ep = b.getAttribute('data-entry');
+        api.analyzeSymbol(b.getAttribute('data-symbol'), ep != null ? parseFloat(ep) : undefined);
+      });
+    }
     for (const btn of el.querySelectorAll('.remove-watch')) {
       btn.addEventListener('click', () => api.removeWatch(btn.getAttribute('data-symbol')));
     }
@@ -378,7 +384,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     try {
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: resolveBrowserConfig() });
+      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: screenFundamentalsConfig() });
       const report = analyzeTicker({
         chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
         entryPrice: isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
@@ -401,6 +407,14 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Analyze'; }
     }
+  }
+
+  async function analyzeSymbol(symbol, entryPrice) {
+    const ti = $('ticker-input'); if (ti) ti.value = String(symbol || '').toUpperCase();
+    const ep = $('entry-price-input'); if (ep) ep.value = (entryPrice != null && isFinite(entryPrice)) ? String(entryPrice) : '';
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (win && typeof win.scrollTo === 'function') { try { win.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* jsdom */ } }
+    return analyze();
   }
 
   async function addCurrentToWatchlist() {
@@ -606,7 +620,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   const api = {
-    analyze, addCurrentToWatchlist, removeWatch, setWatchlist,
+    analyze, analyzeSymbol, addCurrentToWatchlist, removeWatch, setWatchlist,
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
