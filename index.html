@@ -178,11 +178,12 @@
     </section>
 
     <div class="controls" style="margin-top:14px">
-      <button id="refresh-btn">Check now</button>
+      <button id="refresh-btn">↻ Refresh entry/exit (live)</button>
       <button id="copy-watchlist-btn">Copy watchlist JSON (public)</button>
       <button id="copy-mailing-btn">Copy mailing-lists JSON (private)</button>
       <span id="last-refresh" class="muted"></span>
     </div>
+    <p class="muted" style="margin-top:6px">Entry/exit decisions use live price data (Yahoo). Your selected data-provider key affects the <em>Fundamentals</em> section, not the entry/exit verdicts.</p>
     <textarea id="watchlist-json" readonly spellcheck="false"></textarea>
     <textarea id="mailing-json" readonly spellcheck="false"></textarea>
     <p class="muted"><strong>Public watchlist JSON</strong> — commit into <code>watchlist.json</code> in your GitHub repository (symbols and list names only, no email addresses).

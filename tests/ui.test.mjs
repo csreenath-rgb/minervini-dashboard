@@ -698,3 +698,46 @@ describe('browser auto-picks a browser-compatible provider (jsdom)', async () =>
     assert.ok(!calls.some((u) => u.includes('financialmodelingprep.com')), 'should NOT call FMP in the browser');
   });
 });
+
+// ===== Live refresh uses on-screen provider + verdicts persist (appended, TDD) =====
+describe('live watchlist refresh + verdict persistence (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })),
+      notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('Refresh uses the provider currently selected on screen (unsaved)', async () => {
+    const calls = [];
+    const av = { quarterlyEarnings: [{ fiscalDateEnding: '2026-03-31', reportedEPS: '2.01' }] };
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.includes('function=EARNINGS')) return { ok: true, status: 200, json: async () => av };
+      if (url.includes('function=INCOME_STATEMENT')) return { ok: true, status: 200, json: async () => ({ quarterlyReports: [] }) };
+      if (url.includes('%5EGSPC')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setWatchlist([{ symbol: 'AAPL' }]);
+    // select Alpha Vantage on screen WITHOUT saving it as active
+    dom.window.document.getElementById('fund-provider').value = 'alphavantage';
+    dom.window.document.getElementById('fund-key').value = 'AVK';
+    await app.refreshWatchlist();
+    assert.ok(calls.some((u) => u.includes('alphavantage.co') && u.includes('apikey=AVK')), 'refresh should use the on-screen Alpha Vantage key');
+  });
+  test('verdicts persist across a config re-render (no reset to "not checked yet")', async () => {
+    const { dom, app } = await boot();
+    const doc = dom.window.document;
+    app.setWatchlist([{ symbol: 'AAPL' }]);
+    await app.refreshWatchlist();
+    assert.ok(!doc.getElementById('watchlist').textContent.includes('not checked yet'));
+    app.addSubscriberToActive('a@b.com'); // triggers renderAll
+    assert.ok(!doc.getElementById('watchlist').textContent.includes('not checked yet'), 'verdicts should survive re-render');
+    assert.match(doc.getElementById('watchlist').textContent, /@\d/); // price badge still shown
+  });
+});

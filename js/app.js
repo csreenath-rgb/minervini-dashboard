@@ -33,6 +33,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     lastReport: null,
     seenAlertKeys: new Set(),
     chart: null,
+    lastStatuses: {}, // per-list cache of latest {symbol: {price, entryVerdict, exitVerdict}} so verdicts persist across re-renders
   };
   const winObj = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const setTimer = (winObj && winObj.setTimeout) ? winObj.setTimeout.bind(winObj) : setTimeout;
@@ -56,7 +57,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     renderListSelector(col);
     renderSubscribers(col);
     renderSchedule(col);
-    renderWatchlist(getActiveItems(col));
+    renderWatchlist(getActiveItems(col), state.lastStatuses[getActiveList(col).name] || {});
   }
   // The "active list" is what the rest of the app reads/writes, so the existing
   // analyze / add / remove flows keep working unchanged on the selected list.
@@ -426,12 +427,13 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   // Check one list's items, surface its alerts (deduped per list+symbol+type+day).
-  async function checkListItems(listName, items, { notifyUser = true } = {}) {
+  async function checkListItems(listName, items, { notifyUser = true, fundamentals } = {}) {
     const statuses = {};
+    const cfg = fundamentals || resolveBrowserConfig();
     const today = new Date().toISOString().slice(0, 10);
     for (const item of items) {
       try {
-        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: resolveBrowserConfig() });
+        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: cfg });
         const report = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: item.entryPrice ?? null,
@@ -448,6 +450,11 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
         showError(`${listName ? `${listName}: ` : ''}${item.symbol}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // Cache latest non-null verdicts so they survive re-renders (subscriber/schedule edits, list switches).
+    const prev = state.lastStatuses[listName] || {};
+    const merged = { ...prev };
+    for (const [sym, st] of Object.entries(statuses)) if (st) merged[sym] = st;
+    state.lastStatuses[listName] = merged;
     return statuses;
   }
 
@@ -456,13 +463,33 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (stamp) stamp.textContent = `Watchlist last checked: ${new Date().toLocaleTimeString()}`;
   }
 
-  // "Check now" / programmatic refresh of the ACTIVE list.
+  // Fundamentals config from the PROVIDER CURRENTLY SELECTED ON SCREEN (dropdown + key field),
+  // falling back to the saved browser resolution. Note: this only affects the Fundamentals section;
+  // entry/exit verdicts come from live price/technical data regardless of provider.
+  function screenFundamentalsConfig() {
+    const sel = $('fund-provider');
+    if (!sel) return resolveBrowserConfig();
+    const provider = sel.value || 'yahoo';
+    if (provider === 'yahoo') return { provider: 'yahoo' };
+    const key = ((($('fund-key') && $('fund-key').value) || '').trim()) || getFundamentalsStore().keys[provider] || '';
+    if (!BROWSER_OK[provider] || !key) return resolveBrowserConfig();
+    return { provider, key };
+  }
+
+  // Live refresh of the ACTIVE list (button + programmatic). Uses the on-screen provider.
   async function refreshWatchlist() {
-    const active = getActiveList(getCollection());
-    const statuses = await checkListItems(active.name, active.items, { notifyUser: true });
-    renderWatchlist(active.items, statuses);
-    stampChecked();
-    return statuses;
+    const btn = $('refresh-btn');
+    if (btn && !btn.dataset.label) btn.dataset.label = btn.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+    try {
+      const active = getActiveList(getCollection());
+      const statuses = await checkListItems(active.name, active.items, { notifyUser: true, fundamentals: screenFundamentalsConfig() });
+      renderWatchlist(active.items, statuses);
+      stampChecked();
+      return statuses;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || 'Refresh'; }
+    }
   }
 
   // Scheduler entry point: check a specific list (may not be the active one).
