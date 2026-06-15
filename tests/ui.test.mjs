@@ -556,7 +556,8 @@ describe('fundamentals provider UI (jsdom)', async () => {
     const { dom, app } = await boot();
     app.setFundamentalsConfig({ provider: 'fmp', key: 'K' });
     const stored = JSON.parse(dom.window.localStorage.getItem('minervini_fundamentals'));
-    assert.deepEqual(stored, { provider: 'fmp', key: 'K' });
+    assert.equal(stored.active, 'fmp');
+    assert.equal(stored.keys.fmp, 'K');
     assert.match(dom.window.document.getElementById('fund-status').textContent, /Modeling Prep/);
   });
   test('analyze uses the configured provider for fundamentals', async () => {
@@ -580,5 +581,68 @@ describe('fundamentals provider UI (jsdom)', async () => {
     dom.window.document.getElementById('ticker-input').value = 'AAPL';
     await app.analyze();
     assert.ok(calls.some((u) => u.includes('financialmodelingprep.com') && u.includes('apikey=SECRET')));
+  });
+});
+
+// ===== Fund: multi-key store + test-key button + migration (appended, TDD) =====
+describe('fundamentals multi-key store (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  const fmpRows = [
+    { date: '2025-03-31', epsDiluted: 1.65, revenue: 9.5e10, netIncome: 2.4e10 },
+    { date: '2025-06-30', epsDiluted: 1.57, revenue: 9.4e10, netIncome: 2.3e10 },
+    { date: '2025-09-30', epsDiluted: 1.85, revenue: 1.0e11, netIncome: 2.7e10 },
+    { date: '2025-12-31', epsDiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
+    { date: '2026-03-31', epsDiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
+  ];
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })),
+      notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('index.html declares the Test key button', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    assert.ok(html.includes('id="test-fund-btn"'));
+  });
+  test('keys for multiple providers are all retained across active switches', async () => {
+    const { dom, app } = await boot();
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'FMPKEY' });
+    app.setFundamentalsConfig({ provider: 'finnhub', key: 'FINKEY' });
+    let stored = JSON.parse(dom.window.localStorage.getItem('minervini_fundamentals'));
+    assert.equal(stored.active, 'finnhub');
+    assert.deepEqual(stored.keys, { fmp: 'FMPKEY', finnhub: 'FINKEY' });
+    app.setFundamentalsConfig({ provider: 'fmp' }); // switch active, no new key
+    assert.deepEqual(app.getFundamentalsConfig(), { provider: 'fmp', key: 'FMPKEY' });
+    stored = JSON.parse(dom.window.localStorage.getItem('minervini_fundamentals'));
+    assert.deepEqual(stored.keys, { fmp: 'FMPKEY', finnhub: 'FINKEY' }); // both still there
+  });
+  test('legacy single-key config is migrated on read', async () => {
+    const { dom, app } = await boot();
+    dom.window.localStorage.setItem('minervini_fundamentals', JSON.stringify({ provider: 'fmp', key: 'OLD' }));
+    assert.deepEqual(app.getFundamentalsConfig(), { provider: 'fmp', key: 'OLD' });
+  });
+  test('Test key button reports success when the provider returns enough quarters', async () => {
+    const fetchImpl = async (url) => {
+      if (url.includes('financialmodelingprep')) return { ok: true, status: 200, json: async () => fmpRows };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'K' });
+    await app.testFundamentals();
+    assert.match(dom.window.document.getElementById('fund-status').textContent, /Key works/);
+  });
+  test('Test key button reports failure (no false success via Yahoo fallback)', async () => {
+    const fetchImpl = async (url) => {
+      if (url.includes('financialmodelingprep')) throw new Error('CORS blocked');
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'BAD' });
+    await app.testFundamentals();
+    assert.match(dom.window.document.getElementById('fund-status').textContent, /failed/);
   });
 });

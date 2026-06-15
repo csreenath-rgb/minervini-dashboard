@@ -83,8 +83,11 @@ earnings/revenue history you can plug in a dedicated data API. Pick one in the d
 - **Finnhub** — generous free tier; quarterly EPS (revenue/margins need a higher tier).
 - **Alpha Vantage** — simple, but the free quota (~25/day) is tight for a large watchlist.
 
-If no key is set, or a provider can't be reached from the browser, the dashboard falls back to Yahoo
-automatically. Price/chart data always stays on Yahoo.
+You can save keys for **several providers at once** — the dropdown selects which one is active; switching
+providers never discards another's key. Use the **Test key** button to verify a key actually returns data
+(it reports the real provider result, not a Yahoo fallback). If no key is set, or a provider can't be
+reached from the browser, the dashboard falls back to Yahoo automatically. Price/chart data always stays on
+Yahoo. (FMP uses its newer `/stable/` API, falling back to the legacy `/api/v3/` endpoint.)
 
 **Security & scope.** A browser key is stored in your browser's localStorage and is visible to anyone
 using that device — only ever use a *read-only data-provider* key, never a brokerage account key.

@@ -4,7 +4,7 @@
  * full flow is testable headlessly; in a real browser it auto-initializes.
  */
 import { analyzeTicker } from './engine.js';
-import { fetchTickerBundle } from './data.js';
+import { fetchTickerBundle, fetchProviderFundamentals } from './data.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
   filterNewAlerts, verdictBadge,
@@ -92,23 +92,65 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
   // ---------- fundamentals data provider ----------
   const PROVIDER_LABELS = { yahoo: 'Yahoo (free)', finnhub: 'Finnhub', fmp: 'Financial Modeling Prep', alphavantage: 'Alpha Vantage' };
-  function getFundamentalsConfig() {
-    try { const c = JSON.parse(storage.getItem(FUND_KEY)); if (c && c.provider) return c; } catch { /* ignore */ }
-    return { provider: 'yahoo' };
+  // Store shape: { active: 'yahoo'|'finnhub'|'fmp'|'alphavantage', keys: { provider: key } }.
+  // ALL provider keys are retained; `active` selects which one analysis uses.
+  function getFundamentalsStore() {
+    try {
+      const s = JSON.parse(storage.getItem(FUND_KEY));
+      if (s && s.keys) return { active: s.active || 'yahoo', keys: { ...s.keys } };
+      if (s && s.provider) { // migrate legacy { provider, key }
+        return { active: s.provider, keys: (s.provider !== 'yahoo' && s.key) ? { [s.provider]: s.key } : {} };
+      }
+    } catch { /* ignore */ }
+    return { active: 'yahoo', keys: {} };
   }
-  function saveFundamentalsConfig(cfg) { storage.setItem(FUND_KEY, JSON.stringify(cfg)); renderFundamentalsConfig(); }
-  function setFundamentalsConfig(cfg) { saveFundamentalsConfig(cfg); }
+  function saveFundamentalsStore(store) { storage.setItem(FUND_KEY, JSON.stringify(store)); renderFundamentalsConfig(); }
+  function getFundamentalsConfig() {
+    const s = getFundamentalsStore();
+    return s.active === 'yahoo' ? { provider: 'yahoo' } : { provider: s.active, key: s.keys[s.active] };
+  }
+  function saveProviderKey(provider, key) {
+    const s = getFundamentalsStore();
+    if (provider === 'yahoo') { s.active = 'yahoo'; }
+    else { if (key) s.keys[provider] = key; s.active = provider; }
+    saveFundamentalsStore(s);
+  }
+  // back-compat / test helper: set active provider and optionally its key (keys retained)
+  function setFundamentalsConfig(cfg) {
+    const provider = (cfg && cfg.provider) || 'yahoo';
+    saveProviderKey(provider, cfg && cfg.key);
+  }
+  async function testFundamentals() {
+    const cfg = getFundamentalsConfig();
+    const status = $('fund-status');
+    if (cfg.provider === 'yahoo' || !cfg.key) { if (status) status.textContent = 'Choose a provider and enter a key first.'; return; }
+    if (status) status.textContent = `Testing ${PROVIDER_LABELS[cfg.provider] || cfg.provider}…`;
+    try {
+      const { quarters } = await fetchProviderFundamentals('AAPL', cfg, { fetchImpl });
+      if (status) {
+        status.textContent = quarters.length >= 5
+          ? `✓ Key works — ${PROVIDER_LABELS[cfg.provider] || cfg.provider} returned ${quarters.length} quarters for AAPL.`
+          : `⚠ ${PROVIDER_LABELS[cfg.provider] || cfg.provider} responded but returned only ${quarters.length} quarter(s) for AAPL — check your plan/endpoint; analysis falls back to Yahoo.`;
+      }
+      return quarters.length;
+    } catch (e) {
+      if (status) status.textContent = `✗ ${PROVIDER_LABELS[cfg.provider] || cfg.provider} request failed (${e instanceof Error ? e.message : String(e)}). Often CORS or an invalid key; analysis falls back to Yahoo.`;
+      return 0;
+    }
+  }
   function renderFundamentalsConfig() {
     const sel = $('fund-provider'); if (!sel) return;
-    const cfg = getFundamentalsConfig();
-    sel.value = cfg.provider;
+    const s = getFundamentalsStore();
+    sel.value = s.active;
     const keyEl = $('fund-key');
-    if (keyEl) { keyEl.value = cfg.key || ''; keyEl.disabled = cfg.provider === 'yahoo'; }
+    if (keyEl) { keyEl.value = s.active === 'yahoo' ? '' : (s.keys[s.active] || ''); keyEl.disabled = s.active === 'yahoo'; }
     const status = $('fund-status');
     if (status) {
-      status.textContent = cfg.provider === 'yahoo'
+      const saved = Object.keys(s.keys).filter((k) => s.keys[k]);
+      const savedNote = saved.length ? ` Saved keys: ${saved.map((k) => PROVIDER_LABELS[k] || k).join(', ')}.` : '';
+      status.textContent = (s.active === 'yahoo'
         ? 'Using Yahoo Finance (free, delayed). Add a provider key for more accurate fundamentals.'
-        : `Using ${PROVIDER_LABELS[cfg.provider] || cfg.provider}${cfg.key ? '' : ' — no key set, will fall back to Yahoo'}. Falls back to Yahoo if the provider is unreachable from the browser.`;
+        : `Using ${PROVIDER_LABELS[s.active] || s.active}${s.keys[s.active] ? '' : ' — no key set, will fall back to Yahoo'}.`) + savedNote;
     }
   }
 
@@ -471,14 +513,17 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   });
   const fundSel = $('fund-provider');
   if (fundSel) fundSel.addEventListener('change', () => {
-    const keyEl = $('fund-key'); if (keyEl) keyEl.disabled = fundSel.value === 'yahoo';
+    const s = getFundamentalsStore();
+    const keyEl = $('fund-key');
+    if (keyEl) { keyEl.value = fundSel.value === 'yahoo' ? '' : (s.keys[fundSel.value] || ''); keyEl.disabled = fundSel.value === 'yahoo'; }
   });
   on('save-fund-btn', () => {
     const provider = ($('fund-provider') && $('fund-provider').value) || 'yahoo';
     const key = ($('fund-key') && $('fund-key').value || '').trim();
     if (provider !== 'yahoo' && !key) { showError('Enter the API key for the selected provider, or choose Yahoo.'); return; }
-    saveFundamentalsConfig(provider === 'yahoo' ? { provider: 'yahoo' } : { provider, key });
+    saveProviderKey(provider, key);
   });
+  on('test-fund-btn', () => { testFundamentals(); });
   on('save-schedule-btn', () => {
     const mode = ($('schedule-mode') && $('schedule-mode').value) || 'default';
     let schedule = { mode: 'default' };
@@ -511,7 +556,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
-    checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig,
+    checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals,
   };
   return api;
 }

@@ -16,13 +16,21 @@ const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; 
 // ---- Financial Modeling Prep: one call, quarterly income statement ----
 export const fmp = {
   needsKey: true,
-  urls: (symbol, key) => [
-    `https://financialmodelingprep.com/api/v3/income-statement/${encodeURIComponent(symbol)}?period=quarter&limit=12&apikey=${encodeURIComponent(key)}`,
+  // Newer free keys use the /stable/ API; legacy /api/v3/ is now limited to eligible
+  // accounts, so try stable first and fall back to v3.
+  attempts: (symbol, key) => [
+    [`https://financialmodelingprep.com/stable/income-statement?symbol=${encodeURIComponent(symbol)}&period=quarter&limit=12&apikey=${encodeURIComponent(key)}`],
+    [`https://financialmodelingprep.com/api/v3/income-statement/${encodeURIComponent(symbol)}?period=quarter&limit=12&apikey=${encodeURIComponent(key)}`],
   ],
   toQuarters: ([rows]) => {
     if (!Array.isArray(rows)) return [];
     return rows
-      .map((r) => ({ date: r && r.date, eps: num(r && (r.epsdiluted ?? r.eps)), revenue: num(r && r.revenue), netIncome: num(r && r.netIncome) }))
+      .map((r) => ({
+        date: r && r.date,
+        eps: num(r && (r.epsDiluted ?? r.epsdiluted ?? r.eps)),
+        revenue: num(r && r.revenue),
+        netIncome: num(r && r.netIncome),
+      }))
       .filter((q) => q.date)
       .sort((a, b) => a.date.localeCompare(b.date));
   },
@@ -31,10 +39,10 @@ export const fmp = {
 // ---- Alpha Vantage: EARNINGS (EPS) + INCOME_STATEMENT (revenue, net income) ----
 export const alphavantage = {
   needsKey: true,
-  urls: (symbol, key) => [
+  attempts: (symbol, key) => [[
     `https://www.alphavantage.co/query?function=EARNINGS&symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(key)}`,
     `https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(key)}`,
-  ],
+  ]],
   toQuarters: ([earnings, income]) => {
     const byDate = new Map();
     for (const q of (earnings && earnings.quarterlyEarnings) || []) {
@@ -56,9 +64,9 @@ export const alphavantage = {
 // (revenue/net-income quarterly need a higher tier, so they stay null here.)
 export const finnhub = {
   needsKey: true,
-  urls: (symbol, key) => [
+  attempts: (symbol, key) => [[
     `https://finnhub.io/api/v1/stock/earnings?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`,
-  ],
+  ]],
   toQuarters: ([earnings]) => {
     if (!Array.isArray(earnings)) return [];
     return earnings

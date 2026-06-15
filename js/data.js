@@ -77,6 +77,28 @@ export function envFundamentalsConfig() {
 }
 
 /**
+ * Fetch fundamentals straight from the configured provider — NO Yahoo fallback.
+ * Tries each attempt (URL set) in order until one yields quarters; throws on total failure.
+ * Used by the dashboard's "Test key" diagnostic so provider problems are visible.
+ * @returns {Promise<{quarters: Array, fundJson: object}>}
+ */
+export async function fetchProviderFundamentals(symbol, cfg, { fetchImpl } = {}) {
+  const provider = String((cfg && cfg.provider) || '').toLowerCase();
+  const adapter = ADAPTERS[provider];
+  if (!adapter || !cfg.key) throw new Error('No data provider/key configured');
+  let lastErr = null;
+  for (const urls of adapter.attempts(symbol, cfg.key)) {
+    try {
+      const responses = await Promise.all(urls.map((u) => fetchJsonDirect(u, { fetchImpl })));
+      const quarters = adapter.toQuarters(responses);
+      if (quarters && quarters.length) return { quarters, fundJson: quartersToYahooJson(quarters) };
+    } catch (e) { lastErr = e; }
+  }
+  if (lastErr) throw lastErr;
+  return { quarters: [], fundJson: quartersToYahooJson([]) };
+}
+
+/**
  * Fetch fundamentals via the configured data provider, falling back to Yahoo.
  * Returns Yahoo-shaped JSON so the engine parser is unchanged.
  * @param {string} symbol
@@ -84,13 +106,10 @@ export function envFundamentalsConfig() {
  */
 export async function fetchFundamentals(symbol, { fetchImpl, fundamentals } = {}) {
   const cfg = fundamentals || envFundamentalsConfig() || { provider: 'yahoo' };
-  const provider = String(cfg.provider || 'yahoo').toLowerCase();
-  const adapter = ADAPTERS[provider];
-  if (adapter && cfg.key) {
+  if (ADAPTERS[String(cfg.provider || '').toLowerCase()] && cfg.key) {
     try {
-      const responses = await Promise.all(adapter.urls(symbol, cfg.key).map((u) => fetchJsonDirect(u, { fetchImpl })));
-      const quarters = adapter.toQuarters(responses);
-      if (quarters && quarters.length >= 5) return quartersToYahooJson(quarters);
+      const { quarters, fundJson } = await fetchProviderFundamentals(symbol, cfg, { fetchImpl });
+      if (quarters.length >= 5) return fundJson; // usable provider data
     } catch { /* fall through to Yahoo */ }
   }
   return fetchJsonWithFallback(fundamentalsUrl(symbol), { fetchImpl }); // default / fallback

@@ -429,3 +429,35 @@ describe('fetchFundamentals env config (email job)', async () => {
     }
   });
 });
+
+// ===== Fund: FMP stable endpoint + no-fallback probe (appended, TDD) =====
+describe('FMP stable endpoint and provider probe', async () => {
+  const { fmp } = await import('../js/providers.js');
+  const data = await import('../js/data.js');
+  test('FMP tries the /stable/ endpoint first, /api/v3 as fallback', () => {
+    const att = fmp.attempts('AGL', 'K');
+    assert.equal(att.length, 2);
+    assert.ok(att[0][0].includes('/stable/income-statement') && !att[0][0].includes('/api/v3'));
+    assert.ok(att[1][0].includes('/api/v3/income-statement'));
+  });
+  test('FMP toQuarters handles stable epsDiluted (camelCase)', () => {
+    const q = fmp.toQuarters([[{ date: '2026-03-31', epsDiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 }]]);
+    assert.equal(q[0].eps, 2.01);
+  });
+  test('fetchProviderFundamentals throws on total failure (no Yahoo fallback)', async () => {
+    const fetchImpl = async () => { throw new Error('CORS blocked'); };
+    await assert.rejects(() => data.fetchProviderFundamentals('AGL', { provider: 'fmp', key: 'K' }, { fetchImpl }), /CORS blocked/);
+  });
+  test('fetchProviderFundamentals returns quarters from the stable endpoint', async () => {
+    const rows = [
+      { date: '2025-03-31', epsDiluted: 1.65 }, { date: '2025-06-30', epsDiluted: 1.57 },
+      { date: '2025-09-30', epsDiluted: 1.85 }, { date: '2025-12-31', epsDiluted: 2.84 },
+      { date: '2026-03-31', epsDiluted: 2.01 },
+    ];
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => rows }; };
+    const { quarters } = await data.fetchProviderFundamentals('AGL', { provider: 'fmp', key: 'K' }, { fetchImpl });
+    assert.equal(quarters.length, 5);
+    assert.ok(calls[0].includes('/stable/income-statement'));
+  });
+});
