@@ -121,20 +121,29 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     saveProviderKey(provider, cfg && cfg.key);
   }
   async function testFundamentals() {
-    const cfg = getFundamentalsConfig();
+    // Test the provider currently SELECTED in the form (not just the saved one),
+    // using the key in the field or the saved key for that provider.
+    const store = getFundamentalsStore();
+    const provider = ($('fund-provider') && $('fund-provider').value) || store.active || 'yahoo';
+    const key = ((($('fund-key') && $('fund-key').value) || '').trim()) || store.keys[provider] || '';
+    const label = PROVIDER_LABELS[provider] || provider;
     const status = $('fund-status');
-    if (cfg.provider === 'yahoo' || !cfg.key) { if (status) status.textContent = 'Choose a provider and enter a key first.'; return; }
-    if (status) status.textContent = `Testing ${PROVIDER_LABELS[cfg.provider] || cfg.provider}…`;
+    if (provider === 'yahoo' || !key) { if (status) status.textContent = 'Choose a provider and enter its key first.'; return; }
+    if (status) status.textContent = `Testing ${label}…`;
     try {
-      const { quarters } = await fetchProviderFundamentals('AAPL', cfg, { fetchImpl });
+      const { quarters } = await fetchProviderFundamentals('AAPL', { provider, key }, { fetchImpl });
       if (status) {
         status.textContent = quarters.length >= 5
-          ? `✓ Key works — ${PROVIDER_LABELS[cfg.provider] || cfg.provider} returned ${quarters.length} quarters for AAPL.`
-          : `⚠ ${PROVIDER_LABELS[cfg.provider] || cfg.provider} responded but returned only ${quarters.length} quarter(s) for AAPL — check your plan/endpoint; analysis falls back to Yahoo.`;
+          ? `✓ Key works — ${label} returned ${quarters.length} quarters for AAPL.`
+          : `⚠ ${label} responded but returned only ${quarters.length} quarter(s) for AAPL (need 5+ for year-over-year growth) — analysis falls back to Yahoo.`;
       }
       return quarters.length;
     } catch (e) {
-      if (status) status.textContent = `✗ ${PROVIDER_LABELS[cfg.provider] || cfg.provider} request failed (${e instanceof Error ? e.message : String(e)}). Often CORS or an invalid key; analysis falls back to Yahoo.`;
+      const msg = e instanceof Error ? e.message : String(e);
+      let hint = ' Analysis falls back to Yahoo.';
+      if (/\b40[23]\b/.test(msg)) hint = ' That status means this provider\'s free plan does not allow this data from a browser — it still works server-side in the scheduled email job (set it as the FUNDAMENTALS_PROVIDER / FUNDAMENTALS_API_KEY secrets). Analysis falls back to Yahoo.';
+      else if (/Failed to fetch|NetworkError|CORS/i.test(msg)) hint = ' The provider is blocking browser (CORS) requests; use it in the email job instead. Analysis falls back to Yahoo.';
+      if (status) status.textContent = `✗ ${label} request failed (${msg}).${hint}`;
       return 0;
     }
   }
