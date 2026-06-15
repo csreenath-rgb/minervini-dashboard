@@ -86,15 +86,16 @@ export async function fetchProviderFundamentals(symbol, cfg, { fetchImpl } = {})
   const provider = String((cfg && cfg.provider) || '').toLowerCase();
   const adapter = ADAPTERS[provider];
   if (!adapter || !cfg.key) throw new Error('No data provider/key configured');
-  let lastErr = null;
+  const errs = [];
   for (const urls of adapter.attempts(symbol, cfg.key)) {
     try {
       const responses = await Promise.all(urls.map((u) => fetchJsonDirect(u, { fetchImpl })));
       const quarters = adapter.toQuarters(responses);
       if (quarters && quarters.length) return { quarters, fundJson: quartersToYahooJson(quarters) };
-    } catch (e) { lastErr = e; }
+      errs.push(`${urls[0]} -> returned no usable quarters`);
+    } catch (e) { errs.push(e instanceof Error ? e.message : String(e)); }
   }
-  if (lastErr) throw lastErr;
+  if (errs.length) throw new Error(errs.join(' | '));
   return { quarters: [], fundJson: quartersToYahooJson([]) };
 }
 
