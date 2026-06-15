@@ -560,27 +560,25 @@ describe('fundamentals provider UI (jsdom)', async () => {
     assert.equal(stored.keys.fmp, 'K');
     assert.match(dom.window.document.getElementById('fund-status').textContent, /Modeling Prep/);
   });
-  test('analyze uses the configured provider for fundamentals', async () => {
+  test('analyze uses the active browser-compatible provider for fundamentals', async () => {
+    const avEarnings = { quarterlyEarnings: [
+      { fiscalDateEnding: '2025-03-31', reportedEPS: '1.65' }, { fiscalDateEnding: '2025-06-30', reportedEPS: '1.57' },
+      { fiscalDateEnding: '2025-09-30', reportedEPS: '1.85' }, { fiscalDateEnding: '2025-12-31', reportedEPS: '2.84' },
+      { fiscalDateEnding: '2026-03-31', reportedEPS: '2.01' },
+    ] };
     const calls = [];
     const fetchImpl = async (url) => {
       calls.push(url);
-      if (url.includes('financialmodelingprep')) {
-        return { ok: true, status: 200, json: async () => ([
-          { date: '2025-03-31', epsdiluted: 1.65, revenue: 9.5e10, netIncome: 2.4e10 },
-          { date: '2025-06-30', epsdiluted: 1.57, revenue: 9.4e10, netIncome: 2.3e10 },
-          { date: '2025-09-30', epsdiluted: 1.85, revenue: 1.0e11, netIncome: 2.7e10 },
-          { date: '2025-12-31', epsdiluted: 2.84, revenue: 1.4e11, netIncome: 4.2e10 },
-          { date: '2026-03-31', epsdiluted: 2.01, revenue: 1.1e11, netIncome: 2.9e10 },
-        ]) };
-      }
+      if (url.includes('function=EARNINGS')) return { ok: true, status: 200, json: async () => avEarnings };
+      if (url.includes('function=INCOME_STATEMENT')) return { ok: true, status: 200, json: async () => ({ quarterlyReports: [] }) };
       if (url.includes('%5EGSPC')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
       return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
     };
     const { dom, app } = await boot(fetchImpl);
-    app.setFundamentalsConfig({ provider: 'fmp', key: 'SECRET' });
+    app.setFundamentalsConfig({ provider: 'alphavantage', key: 'SECRET' });
     dom.window.document.getElementById('ticker-input').value = 'AAPL';
     await app.analyze();
-    assert.ok(calls.some((u) => u.includes('financialmodelingprep.com') && u.includes('apikey=SECRET')));
+    assert.ok(calls.some((u) => u.includes('alphavantage.co') && u.includes('apikey=SECRET')));
   });
 });
 
@@ -644,5 +642,59 @@ describe('fundamentals multi-key store (jsdom)', async () => {
     app.setFundamentalsConfig({ provider: 'fmp', key: 'BAD' });
     await app.testFundamentals();
     assert.match(dom.window.document.getElementById('fund-status').textContent, /failed/);
+  });
+});
+
+// ===== Fund: per-environment provider auto-pick (appended, TDD) =====
+describe('browser auto-picks a browser-compatible provider (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })),
+      notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('active FMP + saved AV key -> browser resolves to Alpha Vantage', async () => {
+    const { app } = await boot();
+    app.setFundamentalsConfig({ provider: 'alphavantage', key: 'AVK' });
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'FMPK' }); // active=fmp, both keys saved
+    assert.deepEqual(app.resolveBrowserConfig(), { provider: 'alphavantage', key: 'AVK' });
+  });
+  test('active FMP + no browser key -> browser resolves to Yahoo', async () => {
+    const { app } = await boot();
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'FMPK' });
+    assert.deepEqual(app.resolveBrowserConfig(), { provider: 'yahoo' });
+  });
+  test('active Alpha Vantage with key -> used directly', async () => {
+    const { app } = await boot();
+    app.setFundamentalsConfig({ provider: 'alphavantage', key: 'AVK' });
+    assert.deepEqual(app.resolveBrowserConfig(), { provider: 'alphavantage', key: 'AVK' });
+  });
+  test('analyze routes to Alpha Vantage (browser) even when active is FMP', async () => {
+    const avEarnings = { quarterlyEarnings: [
+      { fiscalDateEnding: '2025-03-31', reportedEPS: '1.65' }, { fiscalDateEnding: '2025-06-30', reportedEPS: '1.57' },
+      { fiscalDateEnding: '2025-09-30', reportedEPS: '1.85' }, { fiscalDateEnding: '2025-12-31', reportedEPS: '2.84' },
+      { fiscalDateEnding: '2026-03-31', reportedEPS: '2.01' },
+    ] };
+    const avIncome = { quarterlyReports: [{ fiscalDateEnding: '2026-03-31', totalRevenue: '111184000000', netIncome: '29578000000' }] };
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.includes('function=EARNINGS')) return { ok: true, status: 200, json: async () => avEarnings };
+      if (url.includes('function=INCOME_STATEMENT')) return { ok: true, status: 200, json: async () => avIncome };
+      if (url.includes('%5EGSPC')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setFundamentalsConfig({ provider: 'alphavantage', key: 'AVK' });
+    app.setFundamentalsConfig({ provider: 'fmp', key: 'FMPK' }); // active FMP, but AV saved
+    dom.window.document.getElementById('ticker-input').value = 'AAPL';
+    await app.analyze();
+    assert.ok(calls.some((u) => u.includes('alphavantage.co')), 'should call Alpha Vantage');
+    assert.ok(!calls.some((u) => u.includes('financialmodelingprep.com')), 'should NOT call FMP in the browser');
   });
 });

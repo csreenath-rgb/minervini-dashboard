@@ -11,6 +11,10 @@
 
 export const FUNDAMENTALS_PROVIDERS = ['yahoo', 'finnhub', 'fmp', 'alphavantage'];
 
+// Which providers work from a browser (CORS-allowed AND free tier permits client-side use).
+// FMP's free plan rejects browser requests (HTTP 402), so it is server/email-job only.
+export const BROWSER_OK = { yahoo: true, finnhub: true, alphavantage: true, fmp: false };
+
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; };
 
 // ---- Financial Modeling Prep: one call, quarterly income statement ----

@@ -84,7 +84,10 @@ earnings/revenue history you can plug in a dedicated data API. Pick one in the d
 - **Alpha Vantage** — simple, but the free quota (~25/day) is tight for a large watchlist.
 
 You can save keys for **several providers at once** — the dropdown selects which one is active; switching
-providers never discards another's key. Use the **Test key** button to verify a key actually returns data
+providers never discards another's key. The dashboard **auto-picks the right source per environment**: the
+live page uses a browser-compatible provider (Alpha Vantage or Finnhub), while **FMP — whose free plan
+blocks browser requests (HTTP 402) — is used automatically by the server-side email job** (set as secrets).
+So you can keep FMP for email alerts and Alpha Vantage for the live page without toggling anything. Use the **Test key** button to verify a key actually returns data
 (it reports the real provider result, not a Yahoo fallback). If no key is set, or a provider can't be
 reached from the browser, the dashboard falls back to Yahoo automatically. Price/chart data always stays on
 Yahoo. (FMP uses its newer `/stable/` API, falling back to the legacy `/api/v3/` endpoint.)

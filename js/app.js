@@ -5,6 +5,7 @@
  */
 import { analyzeTicker } from './engine.js';
 import { fetchTickerBundle, fetchProviderFundamentals } from './data.js';
+import { BROWSER_OK } from './providers.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
   filterNewAlerts, verdictBadge,
@@ -109,6 +110,20 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     const s = getFundamentalsStore();
     return s.active === 'yahoo' ? { provider: 'yahoo' } : { provider: s.active, key: s.keys[s.active] };
   }
+  // What the BROWSER should use: the active provider if it works in a browser and has a
+  // key; otherwise the best saved browser-compatible provider; otherwise Yahoo. (FMP is
+  // browser-blocked on free, so it's skipped here and used only by the server email job.)
+  const BROWSER_PROVIDER_PREFERENCE = ['alphavantage', 'finnhub'];
+  function resolveBrowserConfig() {
+    const s = getFundamentalsStore();
+    const active = s.active || 'yahoo';
+    if (active === 'yahoo') return { provider: 'yahoo' };
+    if (BROWSER_OK[active] && s.keys[active]) return { provider: active, key: s.keys[active] };
+    for (const p of BROWSER_PROVIDER_PREFERENCE) {
+      if (BROWSER_OK[p] && s.keys[p]) return { provider: p, key: s.keys[p] };
+    }
+    return { provider: 'yahoo' };
+  }
   function saveProviderKey(provider, key) {
     const s = getFundamentalsStore();
     if (provider === 'yahoo') { s.active = 'yahoo'; }
@@ -155,11 +170,14 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (keyEl) { keyEl.value = s.active === 'yahoo' ? '' : (s.keys[s.active] || ''); keyEl.disabled = s.active === 'yahoo'; }
     const status = $('fund-status');
     if (status) {
+      const browser = resolveBrowserConfig();
       const saved = Object.keys(s.keys).filter((k) => s.keys[k]);
       const savedNote = saved.length ? ` Saved keys: ${saved.map((k) => PROVIDER_LABELS[k] || k).join(', ')}.` : '';
-      status.textContent = (s.active === 'yahoo'
-        ? 'Using Yahoo Finance (free, delayed). Add a provider key for more accurate fundamentals.'
-        : `Using ${PROVIDER_LABELS[s.active] || s.active}${s.keys[s.active] ? '' : ' — no key set, will fall back to Yahoo'}.`) + savedNote;
+      const needKeyNote = (browser.provider === 'yahoo' && s.active !== 'yahoo')
+        ? ' Add an Alpha Vantage or Finnhub key for richer live fundamentals.' : '';
+      const fmpNote = s.keys.fmp
+        ? ' FMP is browser-restricted on its free plan, so it powers the scheduled email job (server-side), not the live page.' : '';
+      status.textContent = `Live dashboard uses ${PROVIDER_LABELS[browser.provider] || browser.provider}.${needKeyNote}${fmpNote}${savedNote}`;
     }
   }
 
@@ -359,7 +377,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     try {
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: getFundamentalsConfig() });
+      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: resolveBrowserConfig() });
       const report = analyzeTicker({
         chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
         entryPrice: isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
@@ -413,7 +431,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     const today = new Date().toISOString().slice(0, 10);
     for (const item of items) {
       try {
-        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: getFundamentalsConfig() });
+        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: resolveBrowserConfig() });
         const report = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: item.entryPrice ?? null,
@@ -565,7 +583,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
-    checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals,
+    checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals, resolveBrowserConfig,
   };
   return api;
 }
