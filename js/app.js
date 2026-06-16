@@ -39,6 +39,18 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   const setTimer = (winObj && winObj.setTimeout) ? winObj.setTimeout.bind(winObj) : setTimeout;
   const clearTimer = (winObj && winObj.clearTimeout) ? winObj.clearTimeout.bind(winObj) : clearTimeout;
   const timers = new Map(); // per-list dashboard check timers
+  let toastTimer = null;
+  function showToast(message, ok = true) {
+    const el = $('toast');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `toast show ${ok ? 'ok' : 'err'}`;
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    const setT = (win && win.setTimeout) ? win.setTimeout.bind(win) : setTimeout;
+    const clrT = (win && win.clearTimeout) ? win.clearTimeout.bind(win) : clearTimeout;
+    if (toastTimer) clrT(toastTimer);
+    toastTimer = setT(() => { el.className = 'toast'; }, 3000);
+  }
 
   // ---------- watchlist collection persistence ----------
   function getCollection() {
@@ -418,11 +430,21 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   async function addCurrentToWatchlist() {
-    const symbol = state.lastReport?.symbol || ($('ticker-input').value || '').toUpperCase().trim();
-    if (!symbol) return;
-    const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-    const entryPrice = isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : undefined;
-    saveWatchlist(addToWatchlist(getWatchlist(), { symbol, entryPrice }));
+    try {
+      const symbol = state.lastReport?.symbol || ($('ticker-input').value || '').toUpperCase().trim();
+      if (!symbol) { showToast('Enter a ticker to add to the watchlist.', false); return false; }
+      const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
+      const entryPrice = isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : undefined;
+      const before = getWatchlist().length;
+      saveWatchlist(addToWatchlist(getWatchlist(), { symbol, entryPrice }));
+      const listName = getActiveList(getCollection()).name;
+      const added = getWatchlist().length > before;
+      showToast(`✓ ${symbol} ${added ? 'added to' : 'updated in'} "${listName}".`, true);
+      return true;
+    } catch (e) {
+      showToast('Couldn\'t add to the watchlist — please try again.', false);
+      return false;
+    }
   }
 
   function removeWatch(symbol) {

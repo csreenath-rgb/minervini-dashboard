@@ -777,3 +777,40 @@ describe('clickable watchlist symbols (jsdom)', async () => {
     assert.ok(doc.getElementById('verdict-entry').textContent.length > 2);
   });
 });
+
+// ===== Add-to-watchlist feedback toast (appended, TDD) =====
+describe('add-to-watchlist toast (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') }), notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('index.html declares a #toast element', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    assert.ok(html.includes('id="toast"'));
+  });
+  test('adding a ticker shows a success toast naming the symbol', async () => {
+    const { dom, app } = await boot();
+    dom.window.document.getElementById('ticker-input').value = 'AAPL';
+    const ok = await app.addCurrentToWatchlist();
+    assert.equal(ok, true);
+    const t = dom.window.document.getElementById('toast');
+    assert.match(t.textContent, /AAPL/);
+    assert.match(t.textContent, /added|updated/i);
+    assert.ok(t.className.includes('show') && t.className.includes('ok'));
+  });
+  test('adding with no ticker shows an error toast and returns false', async () => {
+    const { dom, app } = await boot();
+    dom.window.document.getElementById('ticker-input').value = '';
+    const ok = await app.addCurrentToWatchlist();
+    assert.equal(ok, false);
+    const t = dom.window.document.getElementById('toast');
+    assert.ok(t.className.includes('err'));
+    assert.match(t.textContent, /ticker/i);
+  });
+});
