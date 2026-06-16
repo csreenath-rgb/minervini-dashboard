@@ -63,7 +63,16 @@ export async function fetchJsonDirect(url, { fetchImpl } = {}) {
   const f = fetchImpl || fetch;
   const res = await f(url);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return res.json();
+  const json = await res.json();
+  // Providers signal quota/auth problems with a 200 + an error object (Alpha Vantage
+  // "Information"/"Note", FMP "Error Message"). Surface it instead of silently returning no data.
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const msg = json['Error Message'] || json.Information || json.Note || json.error;
+    if (msg && !json.quarterlyEarnings && !json.quarterlyReports && !json.timeseries) {
+      throw new Error(String(msg).slice(0, 240));
+    }
+  }
+  return json;
 }
 
 /** Provider+key from environment (used by the Node email job). */

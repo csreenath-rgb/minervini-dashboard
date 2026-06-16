@@ -43,9 +43,11 @@ export const fmp = {
 // ---- Alpha Vantage: EARNINGS (EPS) + INCOME_STATEMENT (revenue, net income) ----
 export const alphavantage = {
   needsKey: true,
+  // Free tier is 25 requests/day, so use a SINGLE EARNINGS call (quarterly EPS) — enough for the
+  // Minervini EPS-growth check. (Revenue/margins would need a 2nd INCOME_STATEMENT call; skipped to
+  // conserve quota. Use FMP server-side for full statements.)
   attempts: (symbol, key) => [[
     `https://www.alphavantage.co/query?function=EARNINGS&symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(key)}`,
-    `https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(key)}`,
   ]],
   toQuarters: ([earnings, income]) => {
     const byDate = new Map();

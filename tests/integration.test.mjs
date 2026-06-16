@@ -461,3 +461,36 @@ describe('FMP stable endpoint and provider probe', async () => {
     assert.ok(calls[0].includes('/stable/income-statement'));
   });
 });
+
+// ===== Fund: surface provider quota/error responses + AV single call (appended, TDD) =====
+describe('provider error surfacing + AV quota conservation', async () => {
+  const data = await import('../js/data.js');
+  const { alphavantage } = await import('../js/providers.js');
+  test('fetchJsonDirect throws on an Alpha Vantage "Information" (quota) response', async () => {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ Information: 'Our standard API rate limit is 25 requests per day.' }) });
+    await assert.rejects(() => data.fetchJsonDirect('https://x.test', { fetchImpl }), /25 requests per day/);
+  });
+  test('fetchJsonDirect throws on a "Note" (rate) and an FMP "Error Message"', async () => {
+    const note = async () => ({ ok: true, status: 200, json: async () => ({ Note: 'Thank you for using Alpha Vantage! call frequency' }) });
+    await assert.rejects(() => data.fetchJsonDirect('https://x.test', { fetchImpl: note }), /call frequency/);
+    const fmpErr = async () => ({ ok: true, status: 200, json: async () => ({ 'Error Message': 'Invalid API KEY.' }) });
+    await assert.rejects(() => data.fetchJsonDirect('https://x.test', { fetchImpl: fmpErr }), /Invalid API KEY/);
+  });
+  test('fetchJsonDirect does NOT throw on valid data (array or known data keys)', async () => {
+    const arr = async () => ({ ok: true, status: 200, json: async () => ([{ date: '2026-03-31' }]) });
+    assert.ok(Array.isArray(await data.fetchJsonDirect('https://x.test', { fetchImpl: arr })));
+    const ok = async () => ({ ok: true, status: 200, json: async () => ({ quarterlyEarnings: [] }) });
+    assert.ok(await data.fetchJsonDirect('https://x.test', { fetchImpl: ok }));
+  });
+  test('Alpha Vantage uses a single EARNINGS call to conserve the 25/day quota', () => {
+    const att = alphavantage.attempts('AVGO', 'K');
+    assert.equal(att.length, 1);
+    assert.equal(att[0].length, 1);
+    assert.ok(att[0][0].includes('function=EARNINGS'));
+    assert.ok(!att[0].some((u) => u.includes('INCOME_STATEMENT')));
+  });
+  test('a provider quota error surfaces through fetchProviderFundamentals (no silent empty)', async () => {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ Information: '25 requests per day' }) });
+    await assert.rejects(() => data.fetchProviderFundamentals('AVGO', { provider: 'alphavantage', key: 'K' }, { fetchImpl }), /25 requests per day/);
+  });
+})
