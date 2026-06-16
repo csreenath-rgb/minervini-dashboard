@@ -384,7 +384,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     try {
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: screenFundamentalsConfig() });
+      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: screenFundamentalsConfig(), cache: storage });
       const report = analyzeTicker({
         chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
         entryPrice: isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
@@ -447,7 +447,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     const today = new Date().toISOString().slice(0, 10);
     for (const item of items) {
       try {
-        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: cfg });
+        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: cfg, cache: storage });
         const report = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: item.entryPrice ?? null,

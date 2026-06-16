@@ -65,6 +65,7 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `js/engine.js` | analysis engine (pure functions, identical in browser and Node) |
 | `js/data.js` | data fetching; Yahoo by default, routes fundamentals to a chosen provider |
 | `js/providers.js` | fundamentals adapters (Finnhub / FMP / Alpha Vantage) normalized to the engine shape |
+| `js/cache.js` | per-ticker browser cache helpers (same-day reuse, incremental chart merge) |
 | `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
 | `js/app.js` | DOM wiring, localStorage watchlist collection, per-list check scheduler, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
@@ -100,6 +101,12 @@ called from a static page and don't provide the multi-quarter fundamentals this 
 
 For the scheduled **email** job, set the key as private repository secrets instead of in the browser:
 `FUNDAMENTALS_PROVIDER` (one of `finnhub` / `fmp` / `alphavantage`) and `FUNDAMENTALS_API_KEY`.
+
+**Caching to conserve quota.** The dashboard caches each ticker in your browser: the same day it reuses the
+stored data with no network calls, and across days it fetches only the new price bars and merges them.
+Fundamentals are reused for a few days per provider (they only change quarterly), and good cached
+fundamentals are never overwritten by a failed/rate-limited fetch — which keeps Alpha Vantage's 25/day free
+limit from being a problem in day-to-day use.
 
 ## Setup
 

@@ -494,3 +494,134 @@ describe('provider error surfacing + AV quota conservation', async () => {
     await assert.rejects(() => data.fetchProviderFundamentals('AVGO', { provider: 'alphavantage', key: 'K' }, { fetchImpl }), /25 requests per day/);
   });
 })
+
+// ===== Cache Phase 1: pure cache helpers (appended, TDD) =====
+describe('cache helpers', async () => {
+  const c = await import('../js/cache.js');
+  const chart = (tsVals) => ({ chart: { result: [{
+    meta: { symbol: 'X', regularMarketPrice: 9 },
+    timestamp: tsVals.map((x) => x[0]),
+    indicators: { quote: [{
+      open: tsVals.map((x) => x[1]), high: tsVals.map((x) => x[1]), low: tsVals.map((x) => x[1]),
+      close: tsVals.map((x) => x[1]), volume: tsVals.map(() => 100),
+    }] },
+  }], error: null } });
+
+  test('todayStr is YYYY-MM-DD for a given date', () => {
+    assert.equal(c.todayStr(new Date('2026-06-15T18:00:00')), '2026-06-15');
+  });
+  test('ageDays counts calendar days since a date string', () => {
+    const now = new Date('2026-06-15T10:00:00');
+    assert.equal(c.ageDays('2026-06-15', now), 0);
+    assert.equal(c.ageDays('2026-06-12', now), 3);
+    assert.equal(c.ageDays(null, now), Infinity);
+  });
+  test('lastTimestamp returns the newest bar time or null', () => {
+    assert.equal(c.lastTimestamp(chart([[100, 1], [200, 2]])), 200);
+    assert.equal(c.lastTimestamp({ chart: { result: [{}] } }), null);
+  });
+  test('mergeChartJson appends new bars and overrides the overlapping latest bar', () => {
+    const oldJ = chart([[100, 1], [200, 2]]);
+    const newJ = chart([[200, 2.5], [300, 3]]); // 200 updated, 300 new
+    const merged = c.mergeChartJson(oldJ, newJ);
+    const r = merged.chart.result[0];
+    assert.deepEqual(r.timestamp, [100, 200, 300]);
+    assert.deepEqual(r.indicators.quote[0].close, [1, 2.5, 3]); // 200 overridden, 300 appended
+  });
+  test('mergeChartJson returns the old series when the new payload has no result', () => {
+    const oldJ = chart([[100, 1]]);
+    assert.deepEqual(c.mergeChartJson(oldJ, { chart: { result: null, error: { description: 'x' } } }), oldJ);
+  });
+});
+
+// ===== Cache Phase 2: data.js per-ticker cache (appended, TDD) =====
+describe('fetchTickerBundle per-ticker cache', async () => {
+  const data = await import('../js/data.js');
+  const { todayStr } = await import('../js/cache.js');
+  const { parseYahooFundamentals } = await import('../js/engine.js');
+  const memStore = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), _m: m }; };
+  const chart = (rows, sym = 'AAPL') => ({ chart: { result: [{
+    meta: { symbol: sym, regularMarketPrice: rows.at(-1)[1] },
+    timestamp: rows.map((r) => r[0]),
+    indicators: { quote: [{ open: rows.map((r) => r[1]), high: rows.map((r) => r[1]), low: rows.map((r) => r[1]), close: rows.map((r) => r[1]), volume: rows.map(() => 100) }] },
+  }], error: null } });
+  const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+
+  test('same-day: second fetch reuses cache with zero network calls', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.includes('%5EGSPC')) return ok(fixture('chart_GSPC.json'));
+      if (url.includes('fundamentals-timeseries')) return ok(fixture('fundamentals_AAPL.json'));
+      return ok(fixture('chart_AAPL.json'));
+    };
+    const cache = memStore();
+    await data.fetchTickerBundle('AAPL', { fetchImpl, cache });
+    assert.ok(calls.length > 0, 'first fetch hits the network');
+    calls.length = 0;
+    const b2 = await data.fetchTickerBundle('AAPL', { fetchImpl, cache });
+    assert.equal(calls.length, 0, 'same-day reuse must not fetch');
+    assert.ok(b2.chartJson && b2.fromCache);
+  });
+
+  test('cross-day: fetches only from the last cached bar and merges', async () => {
+    const cache = memStore();
+    cache.setItem('mnv_bundle_AAPL', JSON.stringify({
+      chartDate: '2000-01-01', chart: chart([[100, 1], [200, 2]]), bench: chart([[100, 1], [200, 2]], '^GSPC'),
+      fund: fixture('fundamentals_AAPL.json'), fundProvider: 'yahoo', fundDate: todayStr(),
+    }));
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.includes('fundamentals-timeseries')) return ok(fixture('fundamentals_AAPL.json'));
+      return ok(chart([[200, 2.5], [300, 3]], url.includes('%5EGSPC') ? '^GSPC' : 'AAPL')); // new bar 300
+    };
+    const b = await data.fetchTickerBundle('AAPL', { fetchImpl, cache });
+    assert.ok(calls.some((u) => u.includes('period1=200')), 'should fetch incrementally from last bar');
+    assert.deepEqual(b.chartJson.chart.result[0].timestamp, [100, 200, 300], 'merged series');
+  });
+
+  test('fundamentals reused within TTL and same provider -> no provider call', async () => {
+    const cache = memStore();
+    cache.setItem('mnv_bundle_AAPL', JSON.stringify({
+      chartDate: todayStr(), chart: chart([[100, 1]]), bench: chart([[100, 1]], '^GSPC'),
+      fund: fixture('fundamentals_AAPL.json'), fundProvider: 'fmp', fundDate: todayStr(),
+    }));
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(url); return ok([]); };
+    await data.fetchTickerBundle('AAPL', { fetchImpl, cache, fundamentals: { provider: 'fmp', key: 'K' } });
+    assert.equal(calls.length, 0, 'same-day chart + in-TTL fundamentals => no fetch');
+  });
+
+  test('switching provider forces a fundamentals refetch', async () => {
+    const cache = memStore();
+    cache.setItem('mnv_bundle_AAPL', JSON.stringify({
+      chartDate: todayStr(), chart: chart([[100, 1]]), bench: chart([[100, 1]], '^GSPC'),
+      fund: fixture('fundamentals_AAPL.json'), fundProvider: 'fmp', fundDate: todayStr(),
+    }));
+    const calls = [];
+    const av = { quarterlyEarnings: [
+      { fiscalDateEnding: '2025-03-31', reportedEPS: '1.65' }, { fiscalDateEnding: '2025-06-30', reportedEPS: '1.57' },
+      { fiscalDateEnding: '2025-09-30', reportedEPS: '1.85' }, { fiscalDateEnding: '2025-12-31', reportedEPS: '2.84' },
+      { fiscalDateEnding: '2026-03-31', reportedEPS: '2.01' },
+    ] };
+    const fetchImpl = async (url) => { calls.push(url); return ok(url.includes('function=EARNINGS') ? av : []); };
+    await data.fetchTickerBundle('AAPL', { fetchImpl, cache, fundamentals: { provider: 'alphavantage', key: 'K' } });
+    assert.ok(calls.some((u) => u.includes('alphavantage.co')), 'provider change should refetch fundamentals');
+  });
+
+  test('keep-last-good: a failed/insufficient refetch does not overwrite good cached fundamentals', async () => {
+    const cache = memStore();
+    cache.setItem('mnv_bundle_AAPL', JSON.stringify({
+      chartDate: todayStr(), chart: chart([[100, 1]]), bench: chart([[100, 1]], '^GSPC'),
+      fund: fixture('fundamentals_AAPL.json'), fundProvider: 'alphavantage', fundDate: '2000-01-01', // stale -> refetch
+    }));
+    const fetchImpl = async (url) => {
+      if (url.includes('function=EARNINGS')) return ok({ Information: '25 requests per day' }); // quota
+      if (url.includes('fundamentals-timeseries')) return ok({ timeseries: { result: [] } });   // Yahoo empty
+      return ok({});
+    };
+    const b = await data.fetchTickerBundle('AAPL', { fetchImpl, cache, fundamentals: { provider: 'alphavantage', key: 'K' } });
+    assert.ok(parseYahooFundamentals(b.fundJson).length >= 5, 'should keep the last-good fundamentals');
+  });
+});

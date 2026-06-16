@@ -5,6 +5,8 @@
  */
 
 import { ADAPTERS, quartersToYahooJson } from './providers.js';
+import { parseYahooFundamentals } from './engine.js';
+import { todayStr, ageDays, lastTimestamp, mergeChartJson } from './cache.js';
 
 const YAHOO = 'https://query1.finance.yahoo.com';
 export const BENCHMARK = '^GSPC';
@@ -23,6 +25,11 @@ export const PROXIES = [
  */
 export function chartUrl(symbol, range = '2y') {
   return `${YAHOO}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`;
+}
+
+/** Chart URL for an explicit time window (used for incremental top-ups). */
+export function chartRangeUrl(symbol, period1, period2) {
+  return `${YAHOO}/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${period1}&period2=${period2}&interval=1d`;
 }
 
 /**
@@ -131,16 +138,71 @@ export async function fetchFundamentals(symbol, { fetchImpl, fundamentals } = {}
  * @param {string} symbol
  * @param {{fetchImpl?: typeof fetch, range?: string}} opts
  */
-export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', fundamentals } = {}) {
-  const [chartJson, benchJson] = await Promise.all([
-    fetchJsonWithFallback(chartUrl(symbol, range), { fetchImpl }),
-    fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
-  ]);
-  let fundJson = null;
-  try {
-    fundJson = await fetchFundamentals(symbol, { fetchImpl, fundamentals });
-  } catch {
-    fundJson = null; // fundamentals are best-effort; technicals must still work
+const FUND_TTL_DAYS = 3; // fundamentals are quarterly; reuse for a few days to conserve provider quota
+const hasEnoughFundamentals = (fj) => {
+  try { return parseYahooFundamentals(fj).filter((q) => q.eps != null).length >= 5; } catch { return false; }
+};
+
+/**
+ * Fetch chart, benchmark and fundamentals for one ticker, with an optional
+ * per-ticker browser cache. Same day -> reuse (no network). Across days -> fetch
+ * only the new bars and merge. Fundamentals are reused within FUND_TTL_DAYS for the
+ * same provider, and good cached fundamentals are never overwritten by a failed fetch.
+ * @param {{fetchImpl?: typeof fetch, range?: string, fundamentals?: {provider:string,key?:string}, cache?: {getItem:Function,setItem:Function}}} opts
+ */
+export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', fundamentals, cache } = {}) {
+  const sym = String(symbol || '').toUpperCase();
+  const provider = String((fundamentals && fundamentals.provider) || (envFundamentalsConfig() && envFundamentalsConfig().provider) || 'yahoo').toLowerCase();
+  const cacheKey = `mnv_bundle_${sym}`;
+  let cached = null;
+  if (cache) { try { cached = JSON.parse(cache.getItem(cacheKey)); } catch { cached = null; } }
+  const today = todayStr();
+
+  // ----- chart + benchmark (provider-independent) -----
+  let chartJson; let benchJson; let chartReused = false;
+  if (cached && cached.chartDate === today && cached.chart && cached.bench) {
+    chartJson = cached.chart; benchJson = cached.bench; chartReused = true;
+  } else if (cached && cached.chart && cached.bench) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const p1s = lastTimestamp(cached.chart) || (now - 2 * 365 * 86400);
+      const p1b = lastTimestamp(cached.bench) || p1s;
+      const [freshSym, freshBench] = await Promise.all([
+        fetchJsonWithFallback(chartRangeUrl(sym, p1s, now), { fetchImpl }),
+        fetchJsonWithFallback(chartRangeUrl(BENCHMARK, p1b, now), { fetchImpl }),
+      ]);
+      chartJson = mergeChartJson(cached.chart, freshSym);
+      benchJson = mergeChartJson(cached.bench, freshBench);
+    } catch {
+      [chartJson, benchJson] = await Promise.all([
+        fetchJsonWithFallback(chartUrl(sym, range), { fetchImpl }),
+        fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
+      ]);
+    }
+  } else {
+    [chartJson, benchJson] = await Promise.all([
+      fetchJsonWithFallback(chartUrl(sym, range), { fetchImpl }),
+      fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
+    ]);
   }
-  return { chartJson, benchJson, fundJson };
+
+  // ----- fundamentals (provider-dependent; reuse within TTL, keep last good) -----
+  let fundJson; let fundProvider = provider; let fundDate = today;
+  if (cached && cached.fund && cached.fundProvider === provider && ageDays(cached.fundDate) <= FUND_TTL_DAYS) {
+    fundJson = cached.fund; fundDate = cached.fundDate; // reuse cached, same provider, fresh enough
+  } else {
+    let fetched = null;
+    try { fetched = await fetchFundamentals(sym, { fetchImpl, fundamentals }); } catch { fetched = null; }
+    if (hasEnoughFundamentals(fetched)) { fundJson = fetched; fundDate = today; }
+    else if (cached && cached.fund) { fundJson = cached.fund; fundProvider = cached.fundProvider; fundDate = cached.fundDate; } // keep last good
+    else { fundJson = fetched; fundDate = today; }
+  }
+
+  // ----- persist -----
+  if (cache) {
+    try { cache.setItem(cacheKey, JSON.stringify({ chartDate: today, chart: chartJson, bench: benchJson, fund: fundJson, fundProvider, fundDate })); }
+    catch { /* storage full/unavailable: skip caching */ }
+  }
+
+  return { chartJson, benchJson, fundJson, fromCache: chartReused };
 }
