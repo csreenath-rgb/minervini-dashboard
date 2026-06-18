@@ -141,13 +141,13 @@ describe('dashboard e2e (jsdom)', async () => {
     doc.getElementById('ticker-input').value = 'AAPL';
     await app.analyze();
     await app.addCurrentToWatchlist();
-    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists'));
+    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists_US'));
     const active = stored.lists.find((l) => l.name === stored.activeName);
     assert.equal(active.items.length, 1);
     assert.equal(active.items[0].symbol, 'AAPL');
     assert.match(doc.getElementById('watchlist').textContent, /AAPL/);
     app.removeWatch('AAPL');
-    const after = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists'));
+    const after = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists_US'));
     assert.equal(after.lists.find((l) => l.name === after.activeName).items.length, 0);
   });
 
@@ -383,7 +383,7 @@ describe('browser UI: lists & subscribers (jsdom)', async () => {
     app.newWatchlist('Semis');
     app.addSubscriberToActive('alice@example.com');
     assert.match(doc.getElementById('subscribers').textContent, /alice@example.com/);
-    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists'));
+    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists_US'));
     assert.deepEqual(stored.lists.find((l) => l.name === 'Semis').subscribers, ['alice@example.com']);
     app.removeSubscriberFromActive('alice@example.com');
     assert.equal(doc.getElementById('subscribers').textContent.includes('alice@example.com'), false);
@@ -480,7 +480,7 @@ describe('per-list scheduler surfaces alerts for any list (jsdom)', async () => 
     const { dom, app } = await boot();
     app.newWatchlist('Fast');
     app.setScheduleOnActive({ mode: 'interval', intervalMinutes: 15 });
-    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists'));
+    const stored = JSON.parse(dom.window.localStorage.getItem('minervini_watchlists_US'));
     assert.deepEqual(stored.lists.find((l) => l.name === 'Fast').schedule, { mode: 'interval', intervalMinutes: 15 });
   });
 });
@@ -840,3 +840,56 @@ describe('market config + ticker normalization', async () => {
     assert.equal(core.normalizeTicker('IN', ''), '');
   });
 })
+
+// ===== Mkt Phase 3: market toggle + per-market storage + market-aware analyze (appended, TDD) =====
+describe('US/India market toggle (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })), notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  test('index.html declares the market toggle and indianapi provider option', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    assert.ok(html.includes('id="market-toggle"'));
+    assert.ok(html.includes('data-market="US"') && html.includes('data-market="IN"'));
+    assert.ok(html.includes('value="indianapi"'));
+  });
+  test('watchlists are separate per market and the choice persists', async () => {
+    const { dom, app } = await boot();
+    app.setMarket('US'); app.setWatchlist([{ symbol: 'AAPL' }]);
+    app.setMarket('IN');
+    assert.equal(app.getWatchlist().length, 0, 'India starts empty');
+    app.setWatchlist([{ symbol: 'RELIANCE.NS' }]);
+    assert.equal(app.getWatchlist()[0].symbol, 'RELIANCE.NS');
+    app.setMarket('US');
+    assert.equal(app.getWatchlist()[0].symbol, 'AAPL', 'US list intact');
+    assert.equal(dom.window.localStorage.getItem('minervini_market'), 'US');
+    assert.ok(JSON.parse(dom.window.localStorage.getItem('minervini_watchlists_IN')).lists.length >= 1);
+  });
+  test('India analyze appends .NS and uses the NIFTY benchmark', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(typeof url === 'string' ? url : url.url);
+      if (url.includes && url.includes('%5ENSEI')) return { ok: true, status: 200, json: async () => fx('chart_GSPC.json') };
+      return { ok: true, status: 200, json: async () => fx('chart_AAPL.json') };
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setMarket('IN');
+    dom.window.document.getElementById('ticker-input').value = 'reliance';
+    await app.analyze();
+    assert.equal(dom.window.document.getElementById('ticker-input').value, 'RELIANCE.NS');
+    assert.ok(calls.some((u) => u.includes('RELIANCE.NS')), 'fetches the .NS symbol');
+    assert.ok(calls.some((u) => u.includes('%5ENSEI')), 'fetches the NIFTY benchmark');
+  });
+  test('pre-market watchlists migrate into US', async () => {
+    const { dom, app } = await boot();
+    dom.window.localStorage.setItem('minervini_watchlists', JSON.stringify({ version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'AAPL' }], subscribers: [] }] }));
+    assert.equal(app.getMarket(), 'US');
+    assert.equal(app.getWatchlist()[0].symbol, 'AAPL');
+  });
+});

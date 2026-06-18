@@ -65,6 +65,9 @@
   #watchlist-json, #mailing-json { display: none; width: 100%; height: 110px; margin-top: 10px;
                     font-family: ui-monospace, monospace; font-size: 13px; }
   #subscribers .watch-row { justify-content: space-between; }
+  .seg { margin-left: auto; display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: var(--panel); border: none; border-radius: 0; padding: 8px 14px; color: var(--muted); font-weight: 600; cursor: pointer; }
+  .seg button.active { background: #1f6feb; color: #fff; }
   #toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; max-width: 320px;
     padding: 11px 15px; border-radius: 8px; font-weight: 600; font-size: 14px;
     border: 1px solid var(--border); opacity: 0; transform: translateY(8px);
@@ -83,6 +86,10 @@
     <input id="entry-price-input" placeholder="Your entry price (optional)" type="number" min="0" step="0.01" style="width:200px">
     <button id="analyze-btn" class="primary">Analyze</button>
     <button id="add-watch-btn">+ Watchlist</button>
+  </div>
+  <div id="market-toggle" class="seg" role="group" aria-label="Market">
+    <button data-market="US" type="button" class="active">US</button>
+    <button data-market="IN" type="button">India</button>
   </div>
 </header>
 
@@ -125,6 +132,7 @@
         <option value="finnhub">Finnhub</option>
         <option value="fmp">Financial Modeling Prep</option>
         <option value="alphavantage">Alpha Vantage</option>
+        <option value="indianapi">indianapi.in (India)</option>
       </select>
       <input id="fund-key" type="password" placeholder="API key (read-only data key)" autocomplete="off" style="width:280px">
       <button id="save-fund-btn">Save</button>
@@ -204,7 +212,7 @@
 <footer>
   Implements the methodology published in Mark Minervini's <em>Trade Like a Stock Market Wizard</em>
   (Trend Template, VCP pivot entries, 7–8% stop-loss discipline). Relative Strength is approximated
-  against the S&amp;P 500. Data: Yahoo Finance (delayed). This is an educational decision-support tool —
+  against the market benchmark (S&amp;P 500 for US, NIFTY 50 for India). Data: Yahoo Finance (delayed). This is an educational decision-support tool —
   <strong>not financial advice</strong>. Do your own research; you are responsible for your trades.
 </footer>
 
@@ -212,6 +220,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <!-- ?v bumped on each deploy to defeat browser/CDN caching of the module -->
-<script type="module" src="js/app.js?v=20260613-4"></script>
+<script type="module" src="js/app.js?v=20260619-1"></script>
 </body>
 </html>

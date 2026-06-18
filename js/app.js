@@ -14,11 +14,13 @@ import {
   createWatchlist, setActiveWatchlist, renameWatchlist, deleteWatchlist,
   addSubscriber, removeSubscriber, updateSubscriber, isValidEmail,
   exportPublicWatchlist, exportMailingLists,
+  MARKETS, normalizeMarket, normalizeTicker,
 } from './app-core.js';
 
 const WATCHLIST_KEY = 'minervini_watchlist';        // legacy single-list key (read once for migration)
 const COLLECTION_KEY = 'minervini_watchlists';      // v3 named-collection key
 const FUND_KEY = 'minervini_fundamentals';          // { provider, key } for fundamentals
+const MARKET_KEY = 'minervini_market';              // 'US' | 'IN'
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
@@ -54,14 +56,19 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
 
   // ---------- watchlist collection persistence ----------
   function getCollection() {
+    const market = getMarket();
+    const key = `${COLLECTION_KEY}_${market}`;
     let parsedNew = null;
-    try { parsedNew = JSON.parse(storage.getItem(COLLECTION_KEY)); } catch { parsedNew = null; }
+    try { parsedNew = JSON.parse(storage.getItem(key)); } catch { parsedNew = null; }
+    if (!parsedNew && market === 'US') { // migrate pre-market data into US once
+      try { parsedNew = JSON.parse(storage.getItem(COLLECTION_KEY)); } catch { parsedNew = null; }
+    }
     let parsedLegacy = null;
-    if (!parsedNew) { try { parsedLegacy = JSON.parse(storage.getItem(WATCHLIST_KEY)); } catch { parsedLegacy = null; } }
+    if (!parsedNew && market === 'US') { try { parsedLegacy = JSON.parse(storage.getItem(WATCHLIST_KEY)); } catch { parsedLegacy = null; } }
     return migrateCollection(parsedNew, parsedLegacy);
   }
   function saveCollection(col) {
-    storage.setItem(COLLECTION_KEY, JSON.stringify(col));
+    storage.setItem(`${COLLECTION_KEY}_${getMarket()}`, JSON.stringify(col));
     renderAll(col);
     if (autoSchedule) scheduleAllLists();
   }
@@ -108,6 +115,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   const PROVIDER_LABELS = { yahoo: 'Yahoo (free)', finnhub: 'Finnhub', fmp: 'Financial Modeling Prep', alphavantage: 'Alpha Vantage' };
   // Store shape: { active: 'yahoo'|'finnhub'|'fmp'|'alphavantage', keys: { provider: key } }.
   // ALL provider keys are retained; `active` selects which one analysis uses.
+  function getMarket() { return normalizeMarket(storage.getItem(MARKET_KEY)); }
+  function setMarket(m) { const mk = normalizeMarket(m); storage.setItem(MARKET_KEY, mk); applyMarket(mk); return mk; }
   function getFundamentalsStore() {
     try {
       const s = JSON.parse(storage.getItem(FUND_KEY));
@@ -202,13 +211,14 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   }
 
   function renderTrendTemplate(tt) {
-    $('trend-template').innerHTML = tt.criteria.map((c) =>
+    const benchName = (MARKETS[getMarket()] || MARKETS.US).benchmarkName;
+    $('trend-template').innerHTML = (tt.criteria.map((c) =>
       `<div class="tt-row ${c.pass ? 'pass' : 'fail'}">
         <span class="tt-icon">${c.pass ? '✔' : '✘'}</span>
         <span class="tt-label">${esc(c.label)}</span>
         <span class="tt-detail">${esc(c.detail)}</span>
       </div>`).join('') +
-      `<div class="tt-summary ${tt.passed ? 'pass' : 'fail'}">Trend Template: ${tt.passed ? 'PASSED (Stage-2 uptrend)' : 'FAILED — not a Minervini buy candidate'}</div>`;
+      `<div class="tt-summary ${tt.passed ? 'pass' : 'fail'}">Trend Template: ${tt.passed ? 'PASSED (Stage-2 uptrend)' : 'FAILED — not a Minervini buy candidate'}</div>`).split('S&amp;P 500').join(esc(benchName));
   }
 
   function renderFundamentals(f) {
@@ -390,13 +400,15 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
 
   // ---------- actions ----------
   async function analyze() {
-    const symbol = ($('ticker-input').value || '').toUpperCase().trim();
+    const market = getMarket();
+    const symbol = normalizeTicker(market, $('ticker-input').value);
     if (!symbol) return null;
+    const tiEl = $('ticker-input'); if (tiEl) tiEl.value = symbol; // reflect normalized (.NS) symbol
     const btn = $('analyze-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
     try {
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
-      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: screenFundamentalsConfig(), cache: storage });
+      const bundle = await fetchTickerBundle(symbol, { fetchImpl, fundamentals: marketFundamentalsConfig(), cache: storage, market });
       const report = analyzeTicker({
         chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
         entryPrice: isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
@@ -431,7 +443,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
 
   async function addCurrentToWatchlist() {
     try {
-      const symbol = state.lastReport?.symbol || ($('ticker-input').value || '').toUpperCase().trim();
+      const raw = state.lastReport?.symbol || ($('ticker-input').value || '');
+      const symbol = normalizeTicker(getMarket(), raw);
       if (!symbol) { showToast('Enter a ticker to add to the watchlist.', false); return false; }
       const entryPriceRaw = $('entry-price-input') ? parseFloat($('entry-price-input').value) : NaN;
       const entryPrice = isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : undefined;
@@ -465,11 +478,12 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   // Check one list's items, surface its alerts (deduped per list+symbol+type+day).
   async function checkListItems(listName, items, { notifyUser = true, fundamentals } = {}) {
     const statuses = {};
-    const cfg = fundamentals || resolveBrowserConfig();
+    const market = getMarket();
+    const cfg = fundamentals || marketFundamentalsConfig();
     const today = new Date().toISOString().slice(0, 10);
     for (const item of items) {
       try {
-        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: cfg, cache: storage });
+        const bundle = await fetchTickerBundle(item.symbol, { fetchImpl, fundamentals: cfg, cache: storage, market });
         const report = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: item.entryPrice ?? null,
@@ -512,6 +526,29 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     return { provider, key };
   }
 
+  // Fundamentals config for the ACTIVE market: India -> indianapi (if key), else US on-screen provider.
+  function marketFundamentalsConfig() {
+    if (getMarket() === 'IN') {
+      const key = getFundamentalsStore().keys.indianapi;
+      return key ? { provider: 'indianapi', key } : { provider: 'yahoo' };
+    }
+    return screenFundamentalsConfig();
+  }
+  function applyMarket() {
+    const col = getCollection();
+    renderAll(col);
+    renderFundamentalsConfig();
+    updateMarketLabels();
+    if (autoSchedule) { for (const l of col.lists) checkOneList(l.name); scheduleAllLists(); }
+  }
+  function updateMarketLabels() {
+    const mk = getMarket();
+    const ti = $('ticker-input');
+    if (ti) ti.placeholder = mk === 'IN' ? 'Ticker (e.g. RELIANCE, TCS)' : 'Ticker (e.g. AAPL, QQQ)';
+    const tg = $('market-toggle');
+    if (tg) for (const b of tg.querySelectorAll('[data-market]')) b.classList.toggle('active', b.getAttribute('data-market') === mk);
+  }
+
   // Live refresh of the ACTIVE list (button + programmatic). Uses the on-screen provider.
   async function refreshWatchlist() {
     const btn = $('refresh-btn');
@@ -519,7 +556,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
     try {
       const active = getActiveList(getCollection());
-      const statuses = await checkListItems(active.name, active.items, { notifyUser: true, fundamentals: screenFundamentalsConfig() });
+      const statuses = await checkListItems(active.name, active.items, { notifyUser: true, fundamentals: marketFundamentalsConfig() });
       renderWatchlist(active.items, statuses);
       stampChecked();
       return statuses;
@@ -614,6 +651,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     saveProviderKey(provider, key);
   });
   on('test-fund-btn', () => { testFundamentals(); });
+  const marketTg = $('market-toggle');
+  if (marketTg) for (const b of marketTg.querySelectorAll('[data-market]')) b.addEventListener('click', () => setMarket(b.getAttribute('data-market')));
   on('save-schedule-btn', () => {
     const mode = ($('schedule-mode') && $('schedule-mode').value) || 'default';
     let schedule = { mode: 'default' };
@@ -633,6 +672,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
 
   renderAll(getCollection());
   renderFundamentalsConfig();
+  updateMarketLabels();
   if (autoSchedule) {
     for (const l of getCollection().lists) checkOneList(l.name); // check every list once on open
     scheduleAllLists();                                          // then each on its own cadence
@@ -647,6 +687,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
     checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals, resolveBrowserConfig,
+    getMarket, setMarket,
   };
   return api;
 }
