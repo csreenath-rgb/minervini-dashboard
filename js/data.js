@@ -8,6 +8,7 @@ import { ADAPTERS, quartersToYahooJson } from './providers.js';
 import { parseYahooFundamentals } from './engine.js';
 import { todayStr, ageDays, lastTimestamp, mergeChartJson } from './cache.js';
 import { MARKETS } from './app-core.js';
+import { parseMfNavHistory } from './mf.js';
 
 const YAHOO = 'https://query1.finance.yahoo.com';
 export const BENCHMARK = '^GSPC';
@@ -145,6 +146,28 @@ const FUND_TTL_DAYS = 3; // fundamentals are quarterly; reuse for a few days to 
 const hasEnoughFundamentals = (fj) => {
   try { return parseYahooFundamentals(fj).filter((q) => q.eps != null).length >= 5; } catch { return false; }
 };
+
+/** Indian mutual fund search + NAV history (mfapi.in, no key, CORS-friendly). */
+export const mfSearchUrl = (q) => `https://api.mfapi.in/mf/search?q=${encodeURIComponent(q)}`;
+export const mfHistoryUrl = (code) => `https://api.mfapi.in/mf/${encodeURIComponent(code)}`;
+
+export async function fetchMfSearch(query, { fetchImpl } = {}) {
+  const arr = await fetchJsonWithFallback(mfSearchUrl(query), { fetchImpl });
+  return Array.isArray(arr)
+    ? arr.map((x) => ({ code: x && x.schemeCode, name: x && x.schemeName })).filter((x) => x.code != null)
+    : [];
+}
+
+export async function fetchMfHistory(code, { fetchImpl, cache } = {}) {
+  const key = `mnv_mf_${code}`;
+  if (cache) {
+    try { const c = JSON.parse(cache.getItem(key)); if (c && c.date === todayStr() && c.parsed) return c.parsed; } catch { /* ignore */ }
+  }
+  const json = await fetchJsonWithFallback(mfHistoryUrl(code), { fetchImpl });
+  const parsed = parseMfNavHistory(json);
+  if (cache) { try { cache.setItem(key, JSON.stringify({ date: todayStr(), parsed })); } catch { /* ignore */ } }
+  return parsed;
+}
 
 /**
  * Fetch chart, benchmark and fundamentals for one ticker, with an optional

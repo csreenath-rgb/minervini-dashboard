@@ -731,3 +731,30 @@ describe('mutual fund core (mfapi.in)', async () => {
     assert.equal(s.navAbove50, true);
   });
 });
+
+// ===== MF Phase 2: mutual fund data fetch (mfapi.in) (appended, TDD) =====
+describe('mutual fund data fetch', async () => {
+  const data = await import('../js/data.js');
+  const memStore = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v) }; };
+  const ok = (b) => ({ ok: true, status: 200, json: async () => b });
+  test('fetchMfSearch normalizes results to {code,name}', async () => {
+    const fetchImpl = async (url) => { assert.ok(url.includes('api.mfapi.in/mf/search')); return ok([{ schemeCode: 120716, schemeName: 'UTI Nifty 50 Index Fund' }, { schemeCode: 120717, schemeName: 'X' }]); };
+    const r = await data.fetchMfSearch('nifty 50', { fetchImpl });
+    assert.deepEqual(r[0], { code: 120716, name: 'UTI Nifty 50 Index Fund' });
+    assert.equal(r.length, 2);
+  });
+  test('fetchMfHistory parses NAV history and reuses cache same-day', async () => {
+    let calls = 0;
+    const body = { meta: { scheme_name: 'UTI Nifty 50', fund_house: 'UTI', scheme_category: 'Index' },
+      data: [{ date: '11-06-2026', nav: '110.0' }, { date: '10-06-2026', nav: '108.0' }] };
+    const fetchImpl = async () => { calls += 1; return ok(body); };
+    const cache = memStore();
+    const r1 = await data.fetchMfHistory(120716, { fetchImpl, cache });
+    assert.equal(r1.meta.scheme_name, 'UTI Nifty 50');
+    assert.equal(r1.navs.length, 2);
+    assert.equal(r1.navs[1].nav, 110);
+    const r2 = await data.fetchMfHistory(120716, { fetchImpl, cache });
+    assert.equal(calls, 1, 'same-day MF history should be served from cache');
+    assert.equal(r2.navs.length, 2);
+  });
+});
