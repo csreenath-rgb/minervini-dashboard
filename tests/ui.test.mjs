@@ -814,3 +814,29 @@ describe('add-to-watchlist toast (jsdom)', async () => {
     assert.match(t.textContent, /ticker/i);
   });
 });
+
+// ===== Mkt Phase 1: market config + ticker normalization (appended, TDD) =====
+describe('market config + ticker normalization', async () => {
+  const core = await import('../js/app-core.js');
+  test('MARKETS defines US and India with correct benchmark/suffix', () => {
+    assert.equal(core.MARKETS.US.benchmark, '^GSPC');
+    assert.equal(core.MARKETS.US.suffix, '');
+    assert.equal(core.MARKETS.IN.benchmark, '^NSEI');
+    assert.equal(core.MARKETS.IN.benchmarkName, 'NIFTY 50');
+    assert.equal(core.MARKETS.IN.suffix, '.NS');
+  });
+  test('normalizeMarket falls back to US for unknown values', () => {
+    assert.equal(core.normalizeMarket('IN'), 'IN');
+    assert.equal(core.normalizeMarket('US'), 'US');
+    assert.equal(core.normalizeMarket('zz'), 'US');
+    assert.equal(core.normalizeMarket(undefined), 'US');
+  });
+  test('normalizeTicker appends .NS only for bare India symbols', () => {
+    assert.equal(core.normalizeTicker('IN', 'reliance'), 'RELIANCE.NS');
+    assert.equal(core.normalizeTicker('IN', 'RELIANCE.NS'), 'RELIANCE.NS');
+    assert.equal(core.normalizeTicker('IN', 'tcs.bo'), 'TCS.BO');
+    assert.equal(core.normalizeTicker('IN', '^NSEI'), '^NSEI');
+    assert.equal(core.normalizeTicker('US', 'aapl'), 'AAPL');
+    assert.equal(core.normalizeTicker('IN', ''), '');
+  });
+})

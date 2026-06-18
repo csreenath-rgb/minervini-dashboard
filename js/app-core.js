@@ -325,3 +325,25 @@ export function nextDashboardCheckMs(schedule, now) {
   const slots = (s.mode === 'times' ? s.times : DEFAULT_EMAIL_SLOTS).map(parseSlot);
   return msUntilNextSlot(now, slots);
 }
+
+// ---------- markets (US / India) ----------
+export const MARKETS = {
+  US: { id: 'US', label: 'US', benchmark: '^GSPC', benchmarkName: 'S&P 500', currency: '$', suffix: '' },
+  IN: { id: 'IN', label: 'India', benchmark: '^NSEI', benchmarkName: 'NIFTY 50', currency: '₹', suffix: '.NS' },
+};
+export const DEFAULT_MARKET = 'US';
+
+export function normalizeMarket(m) {
+  return MARKETS[m] ? m : DEFAULT_MARKET;
+}
+
+/**
+ * Normalize a user-typed ticker for a market. India: bare NSE symbols get a
+ * `.NS` suffix; indices (^...) and already-suffixed (.NS/.BO) are left as-is.
+ */
+export function normalizeTicker(market, raw) {
+  let s = String(raw || '').toUpperCase().trim();
+  if (!s) return '';
+  if (normalizeMarket(market) === 'IN' && !s.startsWith('^') && !s.includes('.')) s += '.NS';
+  return s;
+}
