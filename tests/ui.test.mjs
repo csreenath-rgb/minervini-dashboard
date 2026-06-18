@@ -952,3 +952,78 @@ describe('India mutual fund panel (jsdom)', async () => {
     assert.match(dom.window.document.getElementById('mf-results').textContent, /No funds found/i);
   });
 });
+
+// ===== Sym Phase 1: symbol-search parser (appended, TDD) =====
+describe('parseSymbolSearch (ticker type-ahead)', async () => {
+  const core = await import('../js/app-core.js');
+  const json = { quotes: [
+    { symbol: 'AAPL', longname: 'Apple Inc.', exchDisp: 'NASDAQ', quoteType: 'EQUITY' },
+    { symbol: 'APLE', shortname: 'Apple Hospitality REIT', exchDisp: 'NYSE', quoteType: 'EQUITY' },
+    { symbol: 'RELIANCE.NS', longname: 'Reliance Industries Limited', exchDisp: 'NSE', quoteType: 'EQUITY' },
+    { symbol: 'TCS.BO', longname: 'Tata Consultancy Services', exchDisp: 'BSE', quoteType: 'EQUITY' },
+    { symbol: 'NIFTYBEES.NS', longname: 'Nippon India ETF Nifty 50 BeES', exchDisp: 'NSE', quoteType: 'ETF' },
+    { symbol: 'BTC-USD', shortname: 'Bitcoin USD', quoteType: 'CRYPTOCURRENCY' },
+  ] };
+  test('US market keeps plain equity/ETF symbols with name + exchange', () => {
+    const r = core.parseSymbolSearch(json, 'US');
+    assert.deepEqual(r.map((x) => x.symbol), ['AAPL', 'APLE']);
+    assert.deepEqual(r[0], { symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ' });
+  });
+  test('India market keeps .NS/.BO equity + ETF symbols', () => {
+    const r = core.parseSymbolSearch(json, 'IN');
+    assert.deepEqual(r.map((x) => x.symbol).sort(), ['NIFTYBEES.NS', 'RELIANCE.NS', 'TCS.BO']);
+  });
+  test('non-equity/fund quote types (crypto) are excluded; empty input safe', () => {
+    assert.ok(!core.parseSymbolSearch(json, 'US').some((x) => x.symbol === 'BTC-USD'));
+    assert.deepEqual(core.parseSymbolSearch(null, 'US'), []);
+    assert.deepEqual(core.parseSymbolSearch({ quotes: [] }, 'IN'), []);
+  });
+})
+
+// ===== Sym Phase 3: ticker type-ahead UI (appended, TDD) =====
+describe('ticker type-ahead UI (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  const quotes = { quotes: [
+    { symbol: 'AAPL', longname: 'Apple Inc.', exchDisp: 'NASDAQ', quoteType: 'EQUITY' },
+    { symbol: 'APLE', shortname: 'Apple Hospitality REIT', exchDisp: 'NYSE', quoteType: 'EQUITY' },
+  ] };
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })), notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  const ok = (b) => ({ ok: true, status: 200, json: async () => b });
+  test('index.html declares the suggestions container', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    assert.ok(html.includes('id="ticker-suggestions"'));
+  });
+  test('typing a name shows matching symbols; clicking one fills the ticker box', async () => {
+    const fetchImpl = async (url) => (url.includes('/finance/search') ? ok(quotes) : ok(fx('chart_AAPL.json')));
+    const { dom, app } = await boot(fetchImpl);
+    const doc = dom.window.document;
+    const list = await app.searchTickers('apple');
+    assert.equal(list.length, 2);
+    const box = doc.getElementById('ticker-suggestions');
+    assert.match(box.textContent, /AAPL/);
+    assert.match(box.textContent, /Apple Inc\./);
+    box.querySelector('.ac-item').dispatchEvent(new dom.window.Event('click'));
+    assert.equal(doc.getElementById('ticker-input').value, 'AAPL');
+  });
+  test('no matches shows the valid-ticker error', async () => {
+    const fetchImpl = async (url) => (url.includes('/finance/search') ? ok({ quotes: [] }) : ok(fx('chart_AAPL.json')));
+    const { dom, app } = await boot(fetchImpl);
+    await app.searchTickers('zzzzqqq');
+    assert.match(dom.window.document.getElementById('ticker-suggestions').textContent, /Please enter a valid ticker symbol/i);
+  });
+  test('analyze on an unknown ticker shows the valid-ticker error', async () => {
+    const fetchImpl = async (url) => ok(fx('chart_INVALID.json')); // engine throws "not found"
+    const { dom, app } = await boot(fetchImpl);
+    dom.window.document.getElementById('ticker-input').value = 'NOPElol';
+    await app.analyze();
+    assert.match(dom.window.document.getElementById('alerts').textContent, /Please enter a valid ticker symbol/i);
+  });
+})

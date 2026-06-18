@@ -347,3 +347,25 @@ export function normalizeTicker(market, raw) {
   if (normalizeMarket(market) === 'IN' && !s.startsWith('^') && !s.includes('.')) s += '.NS';
   return s;
 }
+
+// ---------- symbol search (ticker type-ahead) ----------
+/**
+ * Parse Yahoo Finance search results into {symbol, name, exchange}, keeping only
+ * stocks/ETFs and filtering to the active market (US = plain symbols; India = .NS/.BO).
+ */
+export function parseSymbolSearch(json, market) {
+  const quotes = (json && Array.isArray(json.quotes)) ? json.quotes : [];
+  const isIN = normalizeMarket(market) === 'IN';
+  const out = [];
+  for (const q of quotes) {
+    if (!q || !q.symbol) continue;
+    const type = String(q.quoteType || '').toUpperCase();
+    if (type !== 'EQUITY' && type !== 'ETF') continue;
+    const sym = String(q.symbol);
+    const indian = /\.(NS|BO)$/i.test(sym);
+    if (isIN ? !indian : indian) continue;       // US excludes .NS/.BO; India requires them
+    if (!isIN && sym.includes('.')) continue;     // US: skip other foreign suffixes (.L, .TO, ...)
+    out.push({ symbol: sym, name: q.longname || q.shortname || sym, exchange: q.exchDisp || q.exchange || '' });
+  }
+  return out;
+}

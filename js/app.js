@@ -4,7 +4,7 @@
  * full flow is testable headlessly; in a real browser it auto-initializes.
  */
 import { analyzeTicker } from './engine.js';
-import { fetchTickerBundle, fetchProviderFundamentals, fetchMfSearch, fetchMfHistory } from './data.js';
+import { fetchTickerBundle, fetchProviderFundamentals, fetchMfSearch, fetchMfHistory, fetchSymbolSearch } from './data.js';
 import { mfReturns, mfSummary } from './mf.js';
 import { BROWSER_OK } from './providers.js';
 import {
@@ -38,6 +38,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     chart: null,
     lastStatuses: {},
     mfChart: null,
+    suggestTimer: null,
   };
   const winObj = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const setTimer = (winObj && winObj.setTimeout) ? winObj.setTimeout.bind(winObj) : setTimeout;
@@ -403,6 +404,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   // ---------- actions ----------
   async function analyze() {
     const market = getMarket();
+    const sugg = $('ticker-suggestions'); if (sugg) { sugg.innerHTML = ''; sugg.style.display = 'none'; }
     const symbol = normalizeTicker(market, $('ticker-input').value);
     if (!symbol) return null;
     const tiEl = $('ticker-input'); if (tiEl) tiEl.value = symbol; // reflect normalized (.NS) symbol
@@ -428,7 +430,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
       renderChart(report);
       return report;
     } catch (err) {
-      showError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      showError(/not found|no data/i.test(msg) ? 'Please enter a valid ticker symbol.' : msg);
       return null;
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Analyze'; }
@@ -674,7 +677,14 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     setScheduleOnActive(schedule);
   });
   const input = $('ticker-input');
-  if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
+  if (input) {
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') analyze(); });
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    const setT = (win && win.setTimeout) ? win.setTimeout.bind(win) : setTimeout;
+    const clrT = (win && win.clearTimeout) ? win.clearTimeout.bind(win) : clearTimeout;
+    input.addEventListener('input', () => { if (state.suggestTimer) clrT(state.suggestTimer); state.suggestTimer = setT(() => searchTickers(), 250); });
+    input.addEventListener('blur', () => setT(() => { const el = $('ticker-suggestions'); if (el) el.style.display = 'none'; }, 200));
+  }
 
   renderAll(getCollection());
   renderFundamentalsConfig();
@@ -741,13 +751,38 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     catch (e) { if (el) el.innerHTML = `<p class="muted">Could not load fund: ${esc(e instanceof Error ? e.message : String(e))}</p>`; return null; }
   }
 
+  // ---------- ticker type-ahead ----------
+  function renderTickerSuggestions(list) {
+    const el = $('ticker-suggestions'); if (!el) return;
+    if (!list || !list.length) {
+      el.innerHTML = '<div class="ac-empty muted">Please enter a valid ticker symbol.</div>';
+      el.style.display = 'block'; return;
+    }
+    el.innerHTML = list.slice(0, 10).map((x) =>
+      `<div class="ac-item" data-symbol="${esc(x.symbol)}"><strong>${esc(x.symbol)}</strong> — ${esc(x.name)}${x.exchange ? ` <span class="muted">(${esc(x.exchange)})</span>` : ''}</div>`).join('');
+    el.style.display = 'block';
+    for (const it of el.querySelectorAll('.ac-item')) {
+      it.addEventListener('click', () => {
+        const ti = $('ticker-input'); if (ti) ti.value = it.getAttribute('data-symbol');
+        el.innerHTML = ''; el.style.display = 'none';
+      });
+    }
+  }
+  async function searchTickers(query) {
+    const q = String(query != null ? query : (($('ticker-input') && $('ticker-input').value) || '')).trim();
+    const el = $('ticker-suggestions');
+    if (q.length < 2) { if (el) { el.innerHTML = ''; el.style.display = 'none'; } return []; }
+    try { const list = await fetchSymbolSearch(q, { fetchImpl, market: getMarket() }); renderTickerSuggestions(list); return list; }
+    catch (e) { if (el) { el.innerHTML = ''; el.style.display = 'none'; } return []; }
+  }
+
   const api = {
     analyze, analyzeSymbol, addCurrentToWatchlist, removeWatch, setWatchlist,
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
     checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals, resolveBrowserConfig,
-    getMarket, setMarket, mfSearch, mfSelect,
+    getMarket, setMarket, mfSearch, mfSelect, searchTickers,
   };
   return api;
 }

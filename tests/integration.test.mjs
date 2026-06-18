@@ -758,3 +758,24 @@ describe('mutual fund data fetch', async () => {
     assert.equal(r2.navs.length, 2);
   });
 });
+
+// ===== Sym Phase 2: fetchSymbolSearch (appended, TDD) =====
+describe('fetchSymbolSearch (data layer)', async () => {
+  const data = await import('../js/data.js');
+  const quotes = { quotes: [
+    { symbol: 'AAPL', longname: 'Apple Inc.', exchDisp: 'NASDAQ', quoteType: 'EQUITY' },
+    { symbol: 'RELIANCE.NS', longname: 'Reliance Industries', exchDisp: 'NSE', quoteType: 'EQUITY' },
+  ] };
+  test('queries Yahoo search and parses for the US market', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(typeof url === 'string' ? url : url.url); return { ok: true, status: 200, json: async () => quotes }; };
+    const r = await data.fetchSymbolSearch('apple', { fetchImpl, market: 'US' });
+    assert.ok(calls.some((u) => u.includes('/finance/search') && u.includes('q=apple')));
+    assert.deepEqual(r.map((x) => x.symbol), ['AAPL']);
+  });
+  test('parses for the India market (.NS only)', async () => {
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => quotes });
+    const r = await data.fetchSymbolSearch('reliance', { fetchImpl, market: 'IN' });
+    assert.deepEqual(r.map((x) => x.symbol), ['RELIANCE.NS']);
+  });
+});

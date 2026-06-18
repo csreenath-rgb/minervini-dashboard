@@ -65,6 +65,12 @@
   #watchlist-json, #mailing-json { display: none; width: 100%; height: 110px; margin-top: 10px;
                     font-family: ui-monospace, monospace; font-size: 13px; }
   #subscribers .watch-row { justify-content: space-between; }
+  .ac { position: relative; display: inline-block; }
+  .suggestions { display: none; position: absolute; top: 100%; left: 0; z-index: 40; min-width: 300px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; margin-top: 4px; max-height: 280px; overflow: auto; }
+  .suggestions .ac-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+  .suggestions .ac-item:hover { background: #1f6feb33; }
+  .suggestions .ac-empty { padding: 8px 12px; }
   .seg { margin-left: auto; display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .seg button { background: var(--panel); border: none; border-radius: 0; padding: 8px 14px; color: var(--muted); font-weight: 600; cursor: pointer; }
   .seg button.active { background: #1f6feb; color: #fff; }
@@ -82,7 +88,7 @@
 <header>
   <h1>Minervini SEPA Dashboard</h1>
   <div class="controls">
-    <input id="ticker-input" placeholder="Ticker (e.g. AAPL, QQQ)" autocapitalize="characters" autocomplete="off">
+    <span class="ac"><input id="ticker-input" placeholder="Ticker or company name (e.g. AAPL, Apple)" autocapitalize="characters" autocomplete="off"><div id="ticker-suggestions" class="suggestions" role="listbox"></div></span>
     <input id="entry-price-input" placeholder="Your entry price (optional)" type="number" min="0" step="0.01" style="width:200px">
     <button id="analyze-btn" class="primary">Analyze</button>
     <button id="add-watch-btn">+ Watchlist</button>
@@ -230,6 +236,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <!-- ?v bumped on each deploy to defeat browser/CDN caching of the module -->
-<script type="module" src="js/app.js?v=20260619-2"></script>
+<script type="module" src="js/app.js?v=20260619-3"></script>
 </body>
 </html>

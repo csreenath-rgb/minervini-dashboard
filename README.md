@@ -96,6 +96,10 @@ A toggle at the top switches between **US** and **India**. Each market is fully 
 
 ## Fundamental data providers (optional)
 
+**Ticker type-ahead:** type a company name or abbreviation in the ticker box and pick from a dropdown of
+matching symbols (Yahoo search via proxy), filtered to the active market (US, or NSE/BSE `.NS`/`.BO` for
+India). No match shows "Please enter a valid ticker symbol."
+
 By default fundamentals come from Yahoo (free, delayed, sometimes sparse). For more accurate
 earnings/revenue history you can plug in a dedicated data API. Pick one in the dashboard's
 **Fundamental data source** panel and paste a **read-only data key**:

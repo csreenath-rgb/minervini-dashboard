@@ -7,7 +7,7 @@
 import { ADAPTERS, quartersToYahooJson } from './providers.js';
 import { parseYahooFundamentals } from './engine.js';
 import { todayStr, ageDays, lastTimestamp, mergeChartJson } from './cache.js';
-import { MARKETS } from './app-core.js';
+import { MARKETS, parseSymbolSearch } from './app-core.js';
 import { parseMfNavHistory } from './mf.js';
 
 const YAHOO = 'https://query1.finance.yahoo.com';
@@ -167,6 +167,13 @@ export async function fetchMfHistory(code, { fetchImpl, cache } = {}) {
   const parsed = parseMfNavHistory(json);
   if (cache) { try { cache.setItem(key, JSON.stringify({ date: todayStr(), parsed })); } catch { /* ignore */ } }
   return parsed;
+}
+
+/** Symbol search (ticker type-ahead) via Yahoo Finance, through the proxy chain. */
+export const symbolSearchUrl = (q) => `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0`;
+export async function fetchSymbolSearch(query, { fetchImpl, market = 'US' } = {}) {
+  const json = await fetchJsonWithFallback(symbolSearchUrl(query), { fetchImpl });
+  return parseSymbolSearch(json, market);
 }
 
 /**
