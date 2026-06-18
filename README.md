@@ -66,6 +66,7 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `js/data.js` | data fetching; Yahoo by default, routes fundamentals to a chosen provider |
 | `js/providers.js` | fundamentals adapters (Finnhub / FMP / Alpha Vantage) normalized to the engine shape |
 | `js/cache.js` | per-ticker browser cache helpers (same-day reuse, incremental chart merge) |
+| `watchlist.in.json` | India watchlist collection for the email job (NSE `.NS` symbols) |
 | `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
 | `js/app.js` | DOM wiring, localStorage watchlist collection, per-list check scheduler, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
@@ -73,6 +74,21 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `.github/workflows/alerts.yml` | cron: preset daily slots (13:45/16:45/19:45 UTC) + manual trigger |
 | `.github/workflows/ci.yml` | runs the full test suite on every push |
 | `watchlist.json` | named watchlist collection used by the email job (symbols only, no emails) |
+
+## Markets: US and India
+
+A toggle at the top switches between **US** and **India**. Each market is fully separate:
+
+- **Watchlists, subscribers, and schedules are per-market** (your existing lists migrate into **US**).
+- **India** covers **NSE stocks and ETFs** via Yahoo (a bare symbol like `RELIANCE` auto-gets the `.NS`
+  suffix; `^NSEI`/NIFTY 50 is the Relative-Strength benchmark). Mutual funds are out of scope (their
+  free data is NAV-only, which the OHLCV-based engine can't use).
+- **India fundamentals** come from **indianapi.in** (`/historical_stats` quarter results → EPS/Sales/Net
+  Profit), configured by selecting *indianapi.in (India)* in the provider panel and saving its key.
+  Coverage permitting; technicals (Trend Template, entry/exit, RS vs NIFTY) are the core for India.
+- **India email alerts**: maintain `watchlist.in.json` (paste the dashboard's public export while in India
+  mode) and add secrets `MAILING_LISTS_IN` (per-list subscribers) and `INDIANAPI_KEY` (fundamentals). The
+  scheduled job checks US (`watchlist.json`) and India (`watchlist.in.json`) together.
 
 ## Fundamental data providers (optional)
 
