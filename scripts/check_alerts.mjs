@@ -7,7 +7,7 @@
  *
  * Usage: node scripts/check_alerts.mjs [watchlistPath] [outputPath]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { analyzeTicker } from '../js/engine.js';
 import { fetchTickerBundle } from '../js/data.js';
 import { isListDueAtSlot } from '../js/app-core.js';
@@ -66,8 +66,14 @@ export function cronToSlot(cron) {
  * @param {Array<{symbol:string, entryPrice?:number}> | {lists:Array}} input
  * @param {{fetchImpl?: typeof fetch}} opts
  */
-export async function checkWatchlist(input, { fetchImpl, slot = null } = {}) {
+function envFundamentalsFor(market) {
+  if (market === 'IN') { const key = process.env.INDIANAPI_KEY; return key ? { provider: 'indianapi', key } : undefined; }
+  return undefined; // US: data.js reads FUNDAMENTALS_PROVIDER/FUNDAMENTALS_API_KEY
+}
+
+export async function checkWatchlist(input, { fetchImpl, slot = null, market = 'US' } = {}) {
   const entries = normalizeWatchlist(input);
+  const fundamentals = envFundamentalsFor(market);
   const results = [];
   const alerts = [];
   const cache = new Map();
@@ -80,7 +86,7 @@ export async function checkWatchlist(input, { fetchImpl, slot = null } = {}) {
     try {
       let r = cache.get(key);
       if (!r) {
-        const bundle = await fetchTickerBundle(symbol, { fetchImpl });
+        const bundle = await fetchTickerBundle(symbol, { fetchImpl, market, fundamentals });
         r = analyzeTicker({
           chartJson: bundle.chartJson, benchJson: bundle.benchJson, fundJson: bundle.fundJson,
           entryPrice: entry.entryPrice ?? null,
@@ -168,16 +174,26 @@ const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split
 if (isMain) {
   const watchlistPath = process.argv[2] || 'watchlist.json';
   const outputPath = process.argv[3] || 'alerts.json';
-  const watchlist = JSON.parse(readFileSync(watchlistPath, 'utf8'));
-  let mailingLists = {};
-  try { mailingLists = process.env.MAILING_LISTS ? JSON.parse(process.env.MAILING_LISTS) : {}; }
-  catch { mailingLists = {}; }
   const fallback = process.env.MAIL_TO || process.env.GMAIL_ADDRESS || null;
   const slot = cronToSlot(process.env.SLOT_CRON);
-  const out = await checkWatchlist(watchlist, { slot });
   const dashboardUrl = process.env.DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
-  const emails = buildEmailGroups(out.alerts, mailingLists, fallback, dashboardUrl);
-  const email = buildEmail(out.alerts, dashboardUrl); // legacy combined form (kept for back-compat)
-  writeFileSync(outputPath, JSON.stringify({ ...out, emails, email }, null, 2));
-  process.stdout.write(`Checked ${out.results.length} symbols, ${out.alerts.length} alerts in ${emails.length} email group(s).\n`);
+  const parseEnvJson = (v) => { try { return v ? JSON.parse(v) : {}; } catch { return {}; } };
+  const marketCfgs = [
+    { market: 'US', file: watchlistPath, mailing: parseEnvJson(process.env.MAILING_LISTS) },
+    { market: 'IN', file: 'watchlist.in.json', mailing: parseEnvJson(process.env.MAILING_LISTS_IN) },
+  ];
+  const results = []; const alerts = []; const emails = [];
+  for (const cfg of marketCfgs) {
+    if (!existsSync(cfg.file)) continue;
+    let parsed; try { parsed = JSON.parse(readFileSync(cfg.file, 'utf8')); } catch { continue; }
+    const out = await checkWatchlist(parsed, { slot, market: cfg.market });
+    for (const r of out.results) results.push({ ...r, market: cfg.market });
+    for (const a of out.alerts) alerts.push({ ...a, market: cfg.market });
+    for (const g of buildEmailGroups(out.alerts, cfg.mailing, fallback, dashboardUrl)) {
+      emails.push({ ...g, market: cfg.market, subject: `[${cfg.market}] ${g.subject}` });
+    }
+  }
+  const email = buildEmail(alerts, dashboardUrl);
+  writeFileSync(outputPath, JSON.stringify({ results, alerts, emails, email, checkedAt: new Date().toISOString() }, null, 2));
+  process.stdout.write(`Checked ${results.length} symbols across markets, ${alerts.length} alerts in ${emails.length} email group(s).\n`);
 }

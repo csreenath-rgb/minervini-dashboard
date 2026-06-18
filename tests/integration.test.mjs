@@ -678,3 +678,22 @@ describe('market-aware benchmark + header fetch', async () => {
     assert.ok(calls.some((u) => u.includes('%5ENSEI')), 'NIFTY 50 ^NSEI benchmark expected');
   });
 });
+
+// ===== Mkt Phase 4: email checker market-aware (appended, TDD) =====
+describe('check_alerts market-aware (India)', async () => {
+  const mod = await import('../scripts/check_alerts.mjs');
+  test('checkWatchlist with market=IN uses the NIFTY benchmark', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(typeof url === 'string' ? url : url.url); return { ok: true, status: 200, json: async () => fixture('chart_AAPL.json') }; };
+    const collection = { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'RELIANCE.NS' }] }] };
+    await mod.checkWatchlist(collection, { fetchImpl, market: 'IN' });
+    assert.ok(calls.some((u) => u.includes('%5ENSEI')), 'expected NIFTY 50 benchmark');
+    assert.ok(calls.some((u) => u.includes('RELIANCE.NS')), 'expected the .NS symbol');
+  });
+  test('default market remains US (^GSPC)', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(typeof url === 'string' ? url : url.url); return { ok: true, status: 200, json: async () => fixture('chart_AAPL.json') }; };
+    await mod.checkWatchlist([{ symbol: 'AAPL' }], { fetchImpl });
+    assert.ok(calls.some((u) => u.includes('%5EGSPC')));
+  });
+});
