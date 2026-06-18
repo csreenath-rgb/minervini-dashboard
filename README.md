@@ -67,6 +67,7 @@ Everything runs client-side on GitHub Pages — no server, no API keys, no accou
 | `js/providers.js` | fundamentals adapters (Finnhub / FMP / Alpha Vantage) normalized to the engine shape |
 | `js/cache.js` | per-ticker browser cache helpers (same-day reuse, incremental chart merge) |
 | `watchlist.in.json` | India watchlist collection for the email job (NSE `.NS` symbols) |
+| `js/mf.js` | Indian mutual-fund helpers (NAV history parse, trailing returns, MA) — informational |
 | `js/app-core.js` | watchlist collection, subscriber & alert logic, schedule helper (pure, unit-tested) |
 | `js/app.js` | DOM wiring, localStorage watchlist collection, per-list check scheduler, notifications |
 | `scripts/check_alerts.mjs` | scheduled watchlist check (reuses the same engine) |
@@ -86,6 +87,9 @@ A toggle at the top switches between **US** and **India**. Each market is fully 
 - **India fundamentals** come from **indianapi.in** (`/historical_stats` quarter results → EPS/Sales/Net
   Profit), configured by selecting *indianapi.in (India)* in the provider panel and saving its key.
   Coverage permitting; technicals (Trend Template, entry/exit, RS vs NIFTY) are the core for India.
+- **India mutual funds (informational)**: in India mode a *Mutual Funds* panel searches funds (mfapi.in, no
+  key) and shows the NAV trend, 50/200-day moving-average position, and 1m–5y trailing returns. It is
+  explicitly **not** a buy/sell signal (mutual funds have no intraday/volume data the SEPA engine needs).
 - **India email alerts**: maintain `watchlist.in.json` (paste the dashboard's public export while in India
   mode) and add secrets `MAILING_LISTS_IN` (per-list subscribers) and `INDIANAPI_KEY` (fundamentals). The
   scheduled job checks US (`watchlist.json`) and India (`watchlist.in.json`) together.

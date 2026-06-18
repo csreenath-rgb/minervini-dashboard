@@ -153,6 +153,16 @@
     </section>
   </div>
 
+  <section class="panel" id="mf-panel" style="display:none">
+    <h2>Mutual funds (India) <span class="muted" style="text-transform:none">— NAV tracker, informational only (not a buy/sell signal)</span></h2>
+    <div class="controls">
+      <input id="mf-search" placeholder="Search fund by name (e.g. Nifty 50 index)" style="width:320px">
+      <button id="mf-search-btn">Search</button>
+    </div>
+    <div id="mf-results" style="margin-top:10px"></div>
+    <div id="mf-detail" style="margin-top:12px"></div>
+  </section>
+
   <section class="panel">
     <h2>Watchlists <span class="muted" style="text-transform:none">— each list checked twice each trading day (and when you open this page); alerts pop up when entry/exit triggers</span></h2>
     <div class="controls" style="margin-bottom:14px">
@@ -220,6 +230,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <!-- ?v bumped on each deploy to defeat browser/CDN caching of the module -->
-<script type="module" src="js/app.js?v=20260619-1"></script>
+<script type="module" src="js/app.js?v=20260619-2"></script>
 </body>
 </html>

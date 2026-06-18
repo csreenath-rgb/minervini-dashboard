@@ -4,7 +4,8 @@
  * full flow is testable headlessly; in a real browser it auto-initializes.
  */
 import { analyzeTicker } from './engine.js';
-import { fetchTickerBundle, fetchProviderFundamentals } from './data.js';
+import { fetchTickerBundle, fetchProviderFundamentals, fetchMfSearch, fetchMfHistory } from './data.js';
+import { mfReturns, mfSummary } from './mf.js';
 import { BROWSER_OK } from './providers.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
@@ -35,7 +36,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     lastReport: null,
     seenAlertKeys: new Set(),
     chart: null,
-    lastStatuses: {}, // per-list cache of latest {symbol: {price, entryVerdict, exitVerdict}} so verdicts persist across re-renders
+    lastStatuses: {},
+    mfChart: null,
   };
   const winObj = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const setTimer = (winObj && winObj.setTimeout) ? winObj.setTimeout.bind(winObj) : setTimeout;
@@ -547,6 +549,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (ti) ti.placeholder = mk === 'IN' ? 'Ticker (e.g. RELIANCE, TCS)' : 'Ticker (e.g. AAPL, QQQ)';
     const tg = $('market-toggle');
     if (tg) for (const b of tg.querySelectorAll('[data-market]')) b.classList.toggle('active', b.getAttribute('data-market') === mk);
+    const mfp = $('mf-panel'); if (mfp) mfp.style.display = mk === 'IN' ? 'block' : 'none';
   }
 
   // Live refresh of the ACTIVE list (button + programmatic). Uses the on-screen provider.
@@ -651,6 +654,9 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     saveProviderKey(provider, key);
   });
   on('test-fund-btn', () => { testFundamentals(); });
+  on('mf-search-btn', () => mfSearch());
+  const mfSearchEl = $('mf-search');
+  if (mfSearchEl) mfSearchEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') mfSearch(); });
   const marketTg = $('market-toggle');
   if (marketTg) for (const b of marketTg.querySelectorAll('[data-market]')) b.addEventListener('click', () => setMarket(b.getAttribute('data-market')));
   on('save-schedule-btn', () => {
@@ -681,13 +687,67 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     if (getWatchlist().length > 0) refreshWatchlist();
   }
 
+  // ---------- India mutual funds (informational; NAV-based, not buy/sell signals) ----------
+  function renderMfResults(list) {
+    const el = $('mf-results'); if (!el) return;
+    if (!list.length) { el.innerHTML = '<p class="muted">No funds found. Try another name.</p>'; return; }
+    el.innerHTML = list.slice(0, 12).map((f) =>
+      `<div class="watch-row"><button class="link-symbol mf-pick" data-code="${esc(String(f.code))}" data-name="${esc(f.name)}">${esc(f.name)}</button><span class="muted">#${esc(String(f.code))}</span></div>`).join('');
+    for (const b of el.querySelectorAll('.mf-pick')) b.addEventListener('click', () => api.mfSelect(b.getAttribute('data-code'), b.getAttribute('data-name')));
+  }
+  function renderMfChart(navs) {
+    const ChartLib = (typeof globalThis !== 'undefined' && globalThis.Chart) || null;
+    const canvas = $('mf-chart');
+    if (!ChartLib || !canvas || typeof canvas.getContext !== 'function') return;
+    const pts = navs.slice(-250);
+    if (state.mfChart) state.mfChart.destroy();
+    state.mfChart = new ChartLib(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels: pts.map((p) => p.date), datasets: [{ label: 'NAV', data: pts.map((p) => p.nav), borderColor: '#4dabf7', borderWidth: 2, pointRadius: 0 }] },
+      options: { animation: false, responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { maxTicksLimit: 8, color: '#8b949e' }, grid: { color: '#21262d' } }, y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } } },
+        plugins: { legend: { labels: { color: '#c9d1d9' } } } },
+    });
+  }
+  function renderMfDetail(parsed) {
+    const el = $('mf-detail'); if (!el) return;
+    const m = parsed.meta || {}; const navs = parsed.navs || [];
+    if (!navs.length) { el.innerHTML = '<p class="muted">No NAV history available for this fund.</p>'; return; }
+    const ret = mfReturns(navs); const s = mfSummary(navs);
+    const pct = (v) => (v == null ? '—' : `${v}%`);
+    el.innerHTML =
+      `<h2 style="text-transform:none; color:#fff">${esc(m.scheme_name || 'Fund')}</h2>` +
+      `<p class="muted">${esc(m.fund_house || '')}${m.scheme_category ? ` · ${esc(m.scheme_category)}` : ''}</p>` +
+      `<p><strong>NAV ₹${s.latestNav != null ? s.latestNav.toFixed(2) : '—'}</strong> <span class="muted">as of ${esc(s.latestDate || '')}</span></p>` +
+      `<div id="levels">` +
+      [['1M', ret['1m']], ['3M', ret['3m']], ['6M', ret['6m']], ['1Y', ret['1y']], ['3Y', ret['3y']], ['5Y', ret['5y']]]
+        .map(([k, v]) => `<div class="lvl"><span>${k} return</span><strong>${pct(v)}</strong></div>`).join('') +
+      `</div>` +
+      `<p class="muted">NAV vs 50-day MA: ${s.ma50 == null ? '—' : (s.navAbove50 ? 'above' : 'below')} · vs 200-day MA: ${s.ma200 == null ? '—' : (s.navAbove200 ? 'above' : 'below')}</p>` +
+      `<p class="muted">Informational only — based on NAV; mutual funds have no intraday/volume data, so this is <strong>not</strong> a SEPA buy/sell signal.</p>` +
+      `<div style="height:300px; position:relative"><canvas id="mf-chart"></canvas></div>`;
+    renderMfChart(navs);
+  }
+  async function mfSearch() {
+    const q = (($('mf-search') && $('mf-search').value) || '').trim();
+    if (q.length < 2) { showToast('Type at least 2 characters to search funds.', false); return []; }
+    const res = $('mf-results'); if (res) res.innerHTML = '<p class="muted">Searching…</p>';
+    try { const list = await fetchMfSearch(q, { fetchImpl }); renderMfResults(list); return list; }
+    catch (e) { if (res) res.innerHTML = `<p class="muted">Search failed: ${esc(e instanceof Error ? e.message : String(e))}</p>`; return []; }
+  }
+  async function mfSelect(code, name) {
+    const el = $('mf-detail'); if (el) el.innerHTML = `<p class="muted">Loading ${esc(name || code)}…</p>`;
+    try { const parsed = await fetchMfHistory(code, { fetchImpl, cache: storage }); renderMfDetail(parsed); return parsed; }
+    catch (e) { if (el) el.innerHTML = `<p class="muted">Could not load fund: ${esc(e instanceof Error ? e.message : String(e))}</p>`; return null; }
+  }
+
   const api = {
     analyze, analyzeSymbol, addCurrentToWatchlist, removeWatch, setWatchlist,
     exportWatchlistJson, refreshWatchlist, getWatchlist, clearAlerts,
     getCollection, newWatchlist, selectWatchlist, renameActiveWatchlist, deleteActiveWatchlist,
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
     checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals, resolveBrowserConfig,
-    getMarket, setMarket,
+    getMarket, setMarket, mfSearch, mfSelect,
   };
   return api;
 }

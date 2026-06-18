@@ -893,3 +893,62 @@ describe('US/India market toggle (jsdom)', async () => {
     assert.equal(app.getWatchlist()[0].symbol, 'AAPL');
   });
 });
+
+// ===== MF Phase 3: India mutual fund panel (appended, TDD) =====
+describe('India mutual fund panel (jsdom)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function boot(fetchImpl) {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage,
+      fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => fx('chart_AAPL.json') })), notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+  const ok = (b) => ({ ok: true, status: 200, json: async () => b });
+  test('index.html declares the MF panel controls', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    for (const id of ['mf-panel', 'mf-search', 'mf-search-btn', 'mf-results', 'mf-detail']) {
+      assert.ok(html.includes(`id="${id}"`), `missing #${id}`);
+    }
+  });
+  test('MF panel is hidden in US and shown in India', async () => {
+    const { dom, app } = await boot();
+    const mfp = dom.window.document.getElementById('mf-panel');
+    app.setMarket('US');
+    assert.equal(mfp.style.display, 'none');
+    app.setMarket('IN');
+    assert.equal(mfp.style.display, 'block');
+  });
+  test('search renders fund results; selecting one renders NAV detail + returns', async () => {
+    const search = [{ schemeCode: 120716, schemeName: 'UTI Nifty 50 Index Fund - Direct Growth' }];
+    const hist = { meta: { scheme_name: 'UTI Nifty 50 Index Fund', fund_house: 'UTI', scheme_category: 'Index' },
+      data: [{ date: '11-06-2025', nav: '100' }, { date: '11-06-2026', nav: '120' }] };
+    const fetchImpl = async (url) => {
+      if (url.includes('/mf/search')) return ok(search);
+      if (url.includes('api.mfapi.in/mf/')) return ok(hist);
+      return ok(fx('chart_AAPL.json'));
+    };
+    const { dom, app } = await boot(fetchImpl);
+    app.setMarket('IN');
+    dom.window.document.getElementById('mf-search').value = 'nifty 50';
+    const list = await app.mfSearch();
+    assert.equal(list.length, 1);
+    assert.match(dom.window.document.getElementById('mf-results').textContent, /UTI Nifty 50/);
+    await app.mfSelect(120716, 'UTI Nifty 50 Index Fund');
+    const detail = dom.window.document.getElementById('mf-detail').textContent;
+    assert.match(detail, /UTI Nifty 50 Index Fund/);
+    assert.match(detail, /1Y return/);
+    assert.match(detail, /20%/);          // (120-100)/100 over ~1y
+    assert.match(detail, /not.*a SEPA buy\/sell signal/i);
+  });
+  test('empty search shows a no-funds message', async () => {
+    const fetchImpl = async (url) => (url.includes('/mf/search') ? ok([]) : ok(fx('chart_AAPL.json')));
+    const { dom, app } = await boot(fetchImpl);
+    app.setMarket('IN');
+    dom.window.document.getElementById('mf-search').value = 'zzzzzz';
+    await app.mfSearch();
+    assert.match(dom.window.document.getElementById('mf-results').textContent, /No funds found/i);
+  });
+});
