@@ -697,3 +697,37 @@ describe('check_alerts market-aware (India)', async () => {
     assert.ok(calls.some((u) => u.includes('%5EGSPC')));
   });
 });
+
+// ===== MF Phase 1: mutual fund core (appended, TDD) =====
+describe('mutual fund core (mfapi.in)', async () => {
+  const mf = await import('../js/mf.js');
+  test('parseMfNavHistory normalizes dates/numbers and sorts ascending', () => {
+    const json = { meta: { scheme_name: 'X Fund', fund_house: 'Y AMC', scheme_category: 'Index' },
+      data: [{ date: '11-06-2026', nav: '110.0' }, { date: '10-06-2026', nav: '108.5' }] };
+    const r = mf.parseMfNavHistory(json);
+    assert.equal(r.meta.scheme_name, 'X Fund');
+    assert.deepEqual(r.navs[0], { date: '2026-06-10', nav: 108.5 });
+    assert.deepEqual(r.navs[1], { date: '2026-06-11', nav: 110 });
+  });
+  test('mfReturns computes trailing returns from the nearest-prior NAV', () => {
+    const navs = [
+      { date: '2025-06-11', nav: 100 },
+      { date: '2026-03-11', nav: 120 },
+      { date: '2026-05-11', nav: 130 },
+      { date: '2026-06-11', nav: 132 },
+    ];
+    const r = mf.mfReturns(navs, new Date('2026-06-11T00:00:00'));
+    assert.equal(r['1m'], 1.54);  // (132-130)/130
+    assert.equal(r['3m'], 10);    // vs 120
+    assert.equal(r['1y'], 32);    // vs 100
+    assert.equal(r['3y'], null);  // no NAV that old
+    assert.equal(r['5y'], null);
+  });
+  test('mfSummary reports MA position for a rising series', () => {
+    const navs = Array.from({ length: 60 }, (_, i) => ({ date: `2026-${String(i + 1).padStart(4, '0')}`, nav: 100 + i }));
+    const s = mf.mfSummary(navs);
+    assert.equal(s.latestNav, 159);
+    assert.ok(s.ma50 != null && s.ma200 == null); // 60 points: 50-MA available, 200 not
+    assert.equal(s.navAbove50, true);
+  });
+});
