@@ -7,6 +7,7 @@
 import { ADAPTERS, quartersToYahooJson } from './providers.js';
 import { parseYahooFundamentals } from './engine.js';
 import { todayStr, ageDays, lastTimestamp, mergeChartJson } from './cache.js';
+import { MARKETS } from './app-core.js';
 
 const YAHOO = 'https://query1.finance.yahoo.com';
 export const BENCHMARK = '^GSPC';
@@ -66,9 +67,11 @@ export async function fetchJsonWithFallback(url, { fetchImpl } = {}) {
 }
 
 /** Direct fetch with NO CORS proxy — used for keyed provider requests so a key is never leaked to a proxy. */
-export async function fetchJsonDirect(url, { fetchImpl } = {}) {
+export async function fetchJsonDirect(urlOrReq, { fetchImpl } = {}) {
   const f = fetchImpl || fetch;
-  const res = await f(url);
+  const url = typeof urlOrReq === 'string' ? urlOrReq : urlOrReq.url;
+  const opts = (urlOrReq && typeof urlOrReq === 'object' && urlOrReq.headers) ? { headers: urlOrReq.headers } : undefined;
+  const res = await f(url, opts);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   const json = await res.json();
   // Providers signal quota/auth problems with a 200 + an error object (Alpha Vantage
@@ -108,7 +111,7 @@ export async function fetchProviderFundamentals(symbol, cfg, { fetchImpl } = {})
       const responses = await Promise.all(urls.map((u) => fetchJsonDirect(u, { fetchImpl })));
       const quarters = adapter.toQuarters(responses);
       if (quarters && quarters.length) return { quarters, fundJson: quartersToYahooJson(quarters) };
-      errs.push(`${urls[0]} -> returned no usable quarters`);
+      errs.push(`${(typeof urls[0] === 'string' ? urls[0] : urls[0].url)} -> returned no usable quarters`);
     } catch (e) { errs.push(e instanceof Error ? e.message : String(e)); }
   }
   if (errs.length) throw new Error(errs.join(' | '));
@@ -150,8 +153,9 @@ const hasEnoughFundamentals = (fj) => {
  * same provider, and good cached fundamentals are never overwritten by a failed fetch.
  * @param {{fetchImpl?: typeof fetch, range?: string, fundamentals?: {provider:string,key?:string}, cache?: {getItem:Function,setItem:Function}}} opts
  */
-export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', fundamentals, cache } = {}) {
+export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', fundamentals, cache, market = 'US' } = {}) {
   const sym = String(symbol || '').toUpperCase();
+  const benchmark = (MARKETS[market] && MARKETS[market].benchmark) || BENCHMARK;
   const provider = String((fundamentals && fundamentals.provider) || (envFundamentalsConfig() && envFundamentalsConfig().provider) || 'yahoo').toLowerCase();
   const cacheKey = `mnv_bundle_${sym}`;
   let cached = null;
@@ -169,20 +173,20 @@ export async function fetchTickerBundle(symbol, { fetchImpl, range = '2y', funda
       const p1b = lastTimestamp(cached.bench) || p1s;
       const [freshSym, freshBench] = await Promise.all([
         fetchJsonWithFallback(chartRangeUrl(sym, p1s, now), { fetchImpl }),
-        fetchJsonWithFallback(chartRangeUrl(BENCHMARK, p1b, now), { fetchImpl }),
+        fetchJsonWithFallback(chartRangeUrl(benchmark, p1b, now), { fetchImpl }),
       ]);
       chartJson = mergeChartJson(cached.chart, freshSym);
       benchJson = mergeChartJson(cached.bench, freshBench);
     } catch {
       [chartJson, benchJson] = await Promise.all([
         fetchJsonWithFallback(chartUrl(sym, range), { fetchImpl }),
-        fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
+        fetchJsonWithFallback(chartUrl(benchmark, range), { fetchImpl }),
       ]);
     }
   } else {
     [chartJson, benchJson] = await Promise.all([
       fetchJsonWithFallback(chartUrl(sym, range), { fetchImpl }),
-      fetchJsonWithFallback(chartUrl(BENCHMARK, range), { fetchImpl }),
+      fetchJsonWithFallback(chartUrl(benchmark, range), { fetchImpl }),
     ]);
   }
 

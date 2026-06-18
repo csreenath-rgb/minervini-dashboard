@@ -307,7 +307,7 @@ describe('fundamentals provider adapters', async () => {
   const { parseYahooFundamentals } = await import('../js/engine.js');
 
   test('provider list includes yahoo + the three data APIs', () => {
-    assert.deepEqual(FUNDAMENTALS_PROVIDERS, ['yahoo', 'finnhub', 'fmp', 'alphavantage']);
+    assert.deepEqual(FUNDAMENTALS_PROVIDERS, ['yahoo', 'finnhub', 'fmp', 'alphavantage', 'indianapi']);
   });
 
   test('FMP income-statement rows -> quarters (eps/revenue/netIncome), sorted', () => {
@@ -623,5 +623,58 @@ describe('fetchTickerBundle per-ticker cache', async () => {
     };
     const b = await data.fetchTickerBundle('AAPL', { fetchImpl, cache, fundamentals: { provider: 'alphavantage', key: 'K' } });
     assert.ok(parseYahooFundamentals(b.fundJson).length >= 5, 'should keep the last-good fundamentals');
+  });
+});
+
+// ===== Mkt Phase 2: indianapi.in adapter + market-aware benchmark/header (appended, TDD) =====
+describe('indianapi.in fundamentals adapter', async () => {
+  const { indianapi, BROWSER_OK, FUNDAMENTALS_PROVIDERS } = await import('../js/providers.js');
+  test('is registered as a browser-capable provider', () => {
+    assert.ok(FUNDAMENTALS_PROVIDERS.includes('indianapi'));
+    assert.equal(BROWSER_OK.indianapi, true);
+  });
+  test('builds a header-authed historical_stats request with the bare symbol', () => {
+    const att = indianapi.attempts('RELIANCE.NS', 'KEY');
+    assert.equal(att.length, 1);
+    assert.equal(att[0].length, 1);
+    assert.ok(att[0][0].url.includes('historical_stats') && att[0][0].url.includes('stock_name=RELIANCE') && att[0][0].url.includes('quarter_results'));
+    assert.ok(!att[0][0].url.includes('.NS'));
+    assert.deepEqual(att[0][0].headers, { 'X-Api-Key': 'KEY' });
+  });
+  test('parses quarter_results maps into sorted quarters (eps/revenue/netIncome)', () => {
+    const data = {
+      Sales: { 'Mar 2025': 100, 'Jun 2025': 110, 'Sep 2025': 120, 'Dec 2025': 130, 'Mar 2026': 140 },
+      'Net Profit': { 'Mar 2025': 9, 'Jun 2025': 10, 'Sep 2025': 11, 'Dec 2025': 12, 'Mar 2026': 13 },
+      'EPS in Rs': { 'Mar 2025': 1.0, 'Jun 2025': 1.1, 'Sep 2025': 1.2, 'Dec 2025': 1.3, 'Mar 2026': 1.4 },
+    };
+    const q = indianapi.toQuarters([data]);
+    assert.equal(q.length, 5);
+    assert.equal(q[0].date, '2025-03-01');
+    assert.equal(q[4].eps, 1.4);
+    assert.equal(q[4].revenue, 140);
+    assert.equal(q[4].netIncome, 13);
+  });
+  test('round-trips through the engine parser', async () => {
+    const { quartersToYahooJson } = await import('../js/providers.js');
+    const { parseYahooFundamentals } = await import('../js/engine.js');
+    const data = { 'EPS in Rs': { 'Mar 2025': 1, 'Jun 2025': 2, 'Sep 2025': 3, 'Dec 2025': 4, 'Mar 2026': 5 } };
+    const q = indianapi.toQuarters([data]);
+    assert.equal(parseYahooFundamentals(quartersToYahooJson(q)).length, 5);
+  });
+});
+
+describe('market-aware benchmark + header fetch', async () => {
+  const data = await import('../js/data.js');
+  test('fetchJsonDirect forwards custom headers', async () => {
+    let seen = null;
+    const fetchImpl = async (url, opts) => { seen = opts; return { ok: true, status: 200, json: async () => ({ ok: 1 }) }; };
+    await data.fetchJsonDirect({ url: 'https://x.test', headers: { 'X-Api-Key': 'K' } }, { fetchImpl });
+    assert.deepEqual(seen && seen.headers, { 'X-Api-Key': 'K' });
+  });
+  test('fetchTickerBundle uses the NIFTY benchmark when market=IN', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => { calls.push(typeof url === 'string' ? url : url.url); return { ok: true, status: 200, json: async () => fixture('chart_AAPL.json') }; };
+    await data.fetchTickerBundle('RELIANCE.NS', { fetchImpl, market: 'IN' });
+    assert.ok(calls.some((u) => u.includes('%5ENSEI')), 'NIFTY 50 ^NSEI benchmark expected');
   });
 });

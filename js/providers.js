@@ -9,11 +9,11 @@
  * revenue/net-income only feed the supporting margin/revenue notes).
  */
 
-export const FUNDAMENTALS_PROVIDERS = ['yahoo', 'finnhub', 'fmp', 'alphavantage'];
+export const FUNDAMENTALS_PROVIDERS = ['yahoo', 'finnhub', 'fmp', 'alphavantage', 'indianapi'];
 
 // Which providers work from a browser (CORS-allowed AND free tier permits client-side use).
 // FMP's free plan rejects browser requests (HTTP 402), so it is server/email-job only.
-export const BROWSER_OK = { yahoo: true, finnhub: true, alphavantage: true, fmp: false };
+export const BROWSER_OK = { yahoo: true, finnhub: true, alphavantage: true, fmp: false, indianapi: true };
 
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : null; };
 
@@ -82,7 +82,40 @@ export const finnhub = {
   },
 };
 
-export const ADAPTERS = { fmp, alphavantage, finnhub };
+// ---- indianapi.in (India): /historical_stats quarter_results -> quarterly EPS/Sales/Net Profit ----
+const IN_MONTHS = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+function parseInQuarterLabel(label) { // "Jun 2024" -> "2024-06-01"
+  const m = String(label).trim().match(/^([A-Za-z]{3})\s+(\d{4})$/);
+  if (!m || !IN_MONTHS[m[1]]) return null;
+  return `${m[2]}-${IN_MONTHS[m[1]]}-01`;
+}
+export const indianapi = {
+  needsKey: true,
+  attempts: (symbol, key) => {
+    const base = String(symbol || '').toUpperCase().replace(/\.(NS|BO|BSE)$/i, '');
+    return [[{
+      url: `https://stock.indianapi.in/historical_stats?stock_name=${encodeURIComponent(base)}&stats=quarter_results`,
+      headers: { 'X-Api-Key': key },
+    }]];
+  },
+  toQuarters: ([data]) => {
+    if (!data || typeof data !== 'object') return [];
+    const epsKey = Object.keys(data).find((k) => /eps/i.test(k));
+    const epsMap = epsKey ? data[epsKey] : null;
+    if (!epsMap || typeof epsMap !== 'object') return [];
+    const sales = data.Sales || {};
+    const profit = data['Net Profit'] || {};
+    const out = [];
+    for (const [label, eps] of Object.entries(epsMap)) {
+      const date = parseInQuarterLabel(label);
+      if (!date) continue;
+      out.push({ date, eps: num(eps), revenue: num(sales[label]), netIncome: num(profit[label]) });
+    }
+    return out.filter((q) => q.eps != null).sort((a, b) => a.date.localeCompare(b.date));
+  },
+};
+
+export const ADAPTERS = { fmp, alphavantage, finnhub, indianapi };
 
 /**
  * Wrap normalized quarters back into the Yahoo timeseries JSON shape that
