@@ -27,5 +27,8 @@ jobs:
       - name: Integration tests (data layer, alert script, live smoke)
         run: node --test tests/integration.test.mjs
 
+      - name: Sync (gist publish/read) tests
+        run: node --test tests/sync.test.mjs
+
       - name: UI / headless end-to-end tests
         run: node --test tests/ui.test.mjs

@@ -32,6 +32,7 @@ jobs:
           FUNDAMENTALS_PROVIDER: ${{ secrets.FUNDAMENTALS_PROVIDER }}
           FUNDAMENTALS_API_KEY: ${{ secrets.FUNDAMENTALS_API_KEY }}
           INDIANAPI_KEY: ${{ secrets.INDIANAPI_KEY }}
+          SYNC_GIST_ID: ${{ secrets.SYNC_GIST_ID }}
         run: node scripts/check_alerts.mjs watchlist.json alerts.json
 
       - name: Email triggered alerts
