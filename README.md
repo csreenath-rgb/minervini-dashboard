@@ -152,13 +152,24 @@ limit from being a problem in day-to-day use.
    - Test it: Actions tab → *Watchlist alerts* → *Run workflow*. With no triggers it logs
      "no alerts triggered"; with triggers it emails you.
 
-## Watchlist sync (the one manual step)
+## Watchlist + mailing-list sync
 
-The in-browser watchlist lives in your browser's localStorage. The email job reads `watchlist.json`
-from the repo. A public static page cannot write to GitHub without exposing a token, so syncing is
-manual by design: click **Copy watchlist JSON (public)** in the dashboard, then paste into
-`watchlist.json` on github.com. To update subscribers, click **Copy mailing-lists JSON (private)**
-and paste into the `MAILING_LISTS` Actions secret. Each takes ~20 seconds, only when things change.
+Your watchlists and per-list subscriber emails are saved in your browser's localStorage. The
+scheduled email job runs on GitHub's servers and cannot read your browser, so the dashboard has to
+publish your data somewhere online for the job to pick it up. Two ways:
+
+**Automatic (recommended) — secret gist.** In the dashboard's **Auto-sync to GitHub** panel, paste a
+GitHub *classic* token with only the `gist` scope (Settings → Developer settings → Tokens (classic);
+no expiry is fine — a gist-scope token cannot touch your code or repository secrets). The dashboard
+then writes your watchlists and mailing lists to a single **secret gist** every time you change them.
+After the gist is created, copy the gist ID shown in the panel into a repository Actions secret named
+`SYNC_GIST_ID` (one time). From then on the email job reads the gist first — no copy/paste, no commits.
+The committed `watchlist.json` and the `MAILING_LISTS` secret are used only as a fallback when the
+gist is unreachable. Email addresses live only in the secret gist, never in the public repo.
+
+**Manual (no token).** If you prefer not to store a token, click **Copy watchlist JSON (public)** and
+paste into `watchlist.json` on github.com, and **Copy mailing-lists JSON (private)** into the
+`MAILING_LISTS` Actions secret. ~20 seconds each, only when things change.
 
 ## Testing
 

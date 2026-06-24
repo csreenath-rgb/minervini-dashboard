@@ -214,6 +214,17 @@
       <p id="schedule-summary" class="muted"></p>
     </section>
 
+    <section class="panel" style="margin-top:14px; background:#0d1117">
+      <h2>Auto-sync to GitHub <span class="muted" style="text-transform:none">— optional; removes the copy/paste step so the email job picks up changes automatically</span></h2>
+      <div class="controls">
+        <input id="gh-token" type="password" autocomplete="off" placeholder="GitHub token (gist scope only)" style="width:320px">
+        <button id="save-gh-token-btn">Save &amp; sync</button>
+        <button id="sync-now-btn">Sync now</button>
+      </div>
+      <p id="sync-status" class="muted"></p>
+      <p id="sync-gist-id" class="muted" style="display:none"></p>
+      <p class="muted hint-private">Create a <strong>classic</strong> token (GitHub &rarr; Settings &rarr; Developer settings &rarr; Tokens (classic)) with <strong>only the <code>gist</code> scope</strong> — no expiry is fine, since it cannot touch your code or repository secrets. It is stored only in this browser. The dashboard writes your watchlists and mailing lists to one <em>secret</em> gist; the scheduled job reads that gist first and uses the committed <code>watchlist.json</code> / <code>MAILING_LISTS</code> secret only as a backup. One-time: after the gist is created, copy the gist ID shown above into the repository Actions secret <code>SYNC_GIST_ID</code>.</p>
+    </section>
     <div class="controls" style="margin-top:14px">
       <button id="refresh-btn">↻ Refresh entry/exit (live)</button>
       <button id="copy-watchlist-btn">Copy watchlist JSON (public)</button>
@@ -239,6 +250,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <!-- ?v bumped on each deploy to defeat browser/CDN caching of the module -->
-<script type="module" src="js/app.js?v=20260619-4"></script>
+<script type="module" src="js/app.js?v=20260624-1"></script>
 </body>
 </html>
