@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { analyzeTicker } from '../js/engine.js';
 import { fetchTickerBundle } from '../js/data.js';
 import { isListDueAtSlot } from '../js/app-core.js';
+import { readGistFiles, selectWatchlistSource, selectMailingSource, GIST_FILE } from '../js/sync.js';
 
 const DEFAULT_DASHBOARD_URL = 'https://csreenath-rgb.github.io/minervini-dashboard/';
 
@@ -169,6 +170,24 @@ export function buildEmailGroups(alerts, mailingLists = {}, fallback = null, das
   return groups;
 }
 
+/**
+ * Pick the watchlist + mailing source for one market: the gist (what the dashboard
+ * last published) when available, otherwise the committed file / env secret backup.
+ * @param {Record<string,object>} gistFiles  parsed gist files (empty if no/unreachable gist)
+ * @param {'US'|'IN'} market
+ * @param {object|null} committedParsed  parsed committed watchlist file (or null if absent)
+ * @param {Record<string,string[]>} envMailing  mailing lists from the env secret
+ */
+export function resolveMarketSources(gistFiles, market, committedParsed, envMailing) {
+  const g = gistFiles || {};
+  const wlFile = market === 'IN' ? GIST_FILE.watchlistIN : GIST_FILE.watchlistUS;
+  const mlFile = market === 'IN' ? GIST_FILE.mailingIN : GIST_FILE.mailingUS;
+  return {
+    watchlist: selectWatchlistSource(g[wlFile], committedParsed ?? null),
+    mailing: selectMailingSource(g[mlFile], envMailing || {}),
+  };
+}
+
 // ---- CLI entry point (skipped when imported by tests) ----
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop());
 if (isMain) {
@@ -182,14 +201,24 @@ if (isMain) {
     { market: 'US', file: watchlistPath, mailing: parseEnvJson(process.env.MAILING_LISTS) },
     { market: 'IN', file: 'watchlist.in.json', mailing: parseEnvJson(process.env.MAILING_LISTS_IN) },
   ];
+  // Auto-sync: prefer what the dashboard last published to the secret gist; the
+  // committed files / MAILING_LISTS secrets are used only as a fallback.
+  let gistFiles = {};
+  const gistId = process.env.SYNC_GIST_ID;
+  if (gistId) {
+    try { gistFiles = await readGistFiles(gistId); }
+    catch (e) { process.stderr.write(`SYNC_GIST_ID set but gist read failed; using committed/secret backup: ${e instanceof Error ? e.message : e}\n`); }
+  }
   const results = []; const alerts = []; const emails = [];
   for (const cfg of marketCfgs) {
-    if (!existsSync(cfg.file)) continue;
-    let parsed; try { parsed = JSON.parse(readFileSync(cfg.file, 'utf8')); } catch { continue; }
-    const out = await checkWatchlist(parsed, { slot, market: cfg.market });
+    let committed = null;
+    if (existsSync(cfg.file)) { try { committed = JSON.parse(readFileSync(cfg.file, 'utf8')); } catch { committed = null; } }
+    const { watchlist, mailing } = resolveMarketSources(gistFiles, cfg.market, committed, cfg.mailing);
+    if (!watchlist) continue;
+    const out = await checkWatchlist(watchlist, { slot, market: cfg.market });
     for (const r of out.results) results.push({ ...r, market: cfg.market });
     for (const a of out.alerts) alerts.push({ ...a, market: cfg.market });
-    for (const g of buildEmailGroups(out.alerts, cfg.mailing, fallback, dashboardUrl)) {
+    for (const g of buildEmailGroups(out.alerts, mailing, fallback, dashboardUrl)) {
       emails.push({ ...g, market: cfg.market, subject: `[${cfg.market}] ${g.subject}` });
     }
   }
