@@ -7,6 +7,7 @@ import { analyzeTicker } from './engine.js';
 import { fetchTickerBundle, fetchProviderFundamentals, fetchMfSearch, fetchMfHistory, fetchSymbolSearch } from './data.js';
 import { mfReturns, mfSummary } from './mf.js';
 import { BROWSER_OK } from './providers.js';
+import { buildGistFiles, publishGist } from './sync.js';
 import {
   addToWatchlist, removeFromWatchlist, deriveAlerts, alertKey,
   filterNewAlerts, verdictBadge,
@@ -22,6 +23,8 @@ const WATCHLIST_KEY = 'minervini_watchlist';        // legacy single-list key (r
 const COLLECTION_KEY = 'minervini_watchlists';      // v3 named-collection key
 const FUND_KEY = 'minervini_fundamentals';          // { provider, key } for fundamentals
 const MARKET_KEY = 'minervini_market';              // 'US' | 'IN'
+const GH_TOKEN_KEY = 'minervini_gh_token';          // classic token, gist scope only (browser-held)
+const SYNC_KEY = 'minervini_sync';                  // { gistId, lastPushedAt, lastError }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
@@ -30,7 +33,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
  * @param {{document: Document, storage: Storage, fetchImpl?: typeof fetch,
  *          notify?: (title: string, body: string) => void, autoRefreshMs?: number}} deps
  */
-export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 0, autoSchedule = false }) {
+export function initApp({ document: doc, storage, fetchImpl, notify, autoRefreshMs = 0, autoSchedule = false, syncDebounceMs = 1500 }) {
   const $ = (id) => doc.getElementById(id);
   const state = {
     lastReport: null,
@@ -74,6 +77,105 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     storage.setItem(`${COLLECTION_KEY}_${getMarket()}`, JSON.stringify(col));
     renderAll(col);
     if (autoSchedule) scheduleAllLists();
+    schedulePublish(); // auto-sync to the secret gist (no-op if no token configured)
+  }
+
+  // ---------- auto-sync to a secret GitHub gist ----------
+  // The dashboard publishes your watchlists + mailing lists to one secret gist so
+  // the server-side email job can read what you last saved (committed files = backup).
+  // The token (classic, "gist" scope only) lives only in this browser's localStorage.
+  function getGhToken() { return (storage.getItem(GH_TOKEN_KEY) || '').trim(); }
+  function saveGhToken(t) {
+    const v = (t || '').trim();
+    if (v) storage.setItem(GH_TOKEN_KEY, v); else storage.removeItem(GH_TOKEN_KEY);
+    renderSyncStatus();
+  }
+  function getSyncStore() {
+    try { const s = JSON.parse(storage.getItem(SYNC_KEY)); if (s && typeof s === 'object') return s; } catch { /* ignore */ }
+    return { gistId: null, lastPushedAt: null, lastError: null };
+  }
+  function saveSyncStore(s) { storage.setItem(SYNC_KEY, JSON.stringify(s)); renderSyncStatus(); }
+  function setSyncGistId(id) { const s = getSyncStore(); s.gistId = id || null; saveSyncStore(s); }
+  function readCollectionForMarket(market) {
+    const key = `${COLLECTION_KEY}_${market}`;
+    let pn = null; try { pn = JSON.parse(storage.getItem(key)); } catch { pn = null; }
+    let pl = null;
+    if (!pn && market === 'US') {
+      try { pn = JSON.parse(storage.getItem(COLLECTION_KEY)); } catch { pn = null; }
+      try { pl = JSON.parse(storage.getItem(WATCHLIST_KEY)); } catch { pl = null; }
+    }
+    return migrateCollection(pn, pl);
+  }
+  // A market is "managed in the browser" once its collection key exists; only those
+  // are published, so an untouched market keeps using its committed-file backup.
+  function marketManaged(market) {
+    if (storage.getItem(`${COLLECTION_KEY}_${market}`) != null) return true;
+    if (market === 'US') return storage.getItem(COLLECTION_KEY) != null || storage.getItem(WATCHLIST_KEY) != null;
+    return false;
+  }
+  function buildSyncFiles() {
+    const collections = {};
+    if (marketManaged('US')) collections.US = readCollectionForMarket('US');
+    if (marketManaged('IN')) collections.IN = readCollectionForMarket('IN');
+    return buildGistFiles(collections);
+  }
+  async function publishSync() {
+    const token = getGhToken();
+    if (!token) return { skipped: true, reason: 'no-token' };
+    const files = buildSyncFiles();
+    if (!Object.keys(files).length) return { skipped: true, reason: 'no-data' };
+    const sync = getSyncStore();
+    try {
+      const out = await publishGist({ token, gistId: sync.gistId, files, fetchImpl });
+      saveSyncStore({ gistId: out.id, lastPushedAt: Date.now(), lastError: null });
+      showToast('✓ Synced watchlists + mailing lists to GitHub');
+      return out;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      saveSyncStore({ ...sync, lastError: msg });
+      showError(`Auto-sync to GitHub failed: ${msg}`);
+      showToast('Auto-sync failed — see message above', false);
+      return { error: msg };
+    }
+  }
+  let publishTimer = null;
+  function schedulePublish() {
+    if (!getGhToken()) return;            // not configured -> nothing to do
+    if (publishTimer) clearTimer(publishTimer);
+    publishTimer = setTimer(() => { publishSync(); }, syncDebounceMs);
+  }
+  function renderSyncStatus() {
+    const st = $('sync-status'); const idEl = $('sync-gist-id');
+    if (st) {
+      if (!getGhToken()) st.textContent = 'Not configured — paste a gist-scope token to auto-sync (otherwise use the manual copy buttons below).';
+      else {
+        const s = getSyncStore();
+        st.textContent = s.lastError ? `Last sync error: ${s.lastError}`
+          : (s.gistId ? `Auto-sync on. Last pushed: ${s.lastPushedAt ? new Date(s.lastPushedAt).toLocaleString() : 'pending'}.`
+                      : 'Token saved — will create the secret gist on your next save (or click “Sync now”).');
+      }
+    }
+    if (idEl) {
+      const s = getSyncStore();
+      idEl.style.display = s.gistId ? 'block' : 'none';
+      if (s.gistId) idEl.innerHTML = `Secret gist ID: <code>${esc(s.gistId)}</code> — set this once as the repository Actions secret <code>SYNC_GIST_ID</code> so the email job reads it.`;
+    }
+  }
+  // ---------- clear the dashboard when switching markets ----------
+  function clearAnalysisView() {
+    const ti = $('ticker-input'); if (ti) ti.value = '';
+    const ep = $('entry-price-input'); if (ep) ep.value = '';
+    const sg = $('ticker-suggestions'); if (sg) { sg.innerHTML = ''; sg.style.display = 'none'; }
+    const title = $('report-title'); if (title) title.textContent = 'Enter a stock or ETF symbol to analyze';
+    for (const id of ['verdict-entry', 'verdict-exit']) { const el = $(id); if (el) el.innerHTML = '<span class="muted">No analysis yet.</span>'; }
+    for (const id of ['trend-template', 'fundamentals', 'levels']) { const el = $(id); if (el) el.innerHTML = '<span class="muted">—</span>'; }
+    if (state.chart) { try { state.chart.destroy(); } catch { /* jsdom */ } state.chart = null; }
+    state.lastReport = null;
+  }
+  function clearMarketView() {
+    clearAnalysisView();
+    clearAlerts();              // wipes alert banners + resets the dedupe set
+    state.lastStatuses = {};    // drop cached verdicts so US/IN don't bleed across the toggle
   }
   function renderAll(col) {
     renderListSelector(col);
@@ -119,7 +221,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   // Store shape: { active: 'yahoo'|'finnhub'|'fmp'|'alphavantage', keys: { provider: key } }.
   // ALL provider keys are retained; `active` selects which one analysis uses.
   function getMarket() { return normalizeMarket(storage.getItem(MARKET_KEY)); }
-  function setMarket(m) { const mk = normalizeMarket(m); storage.setItem(MARKET_KEY, mk); applyMarket(mk); return mk; }
+  function setMarket(m) { const mk = normalizeMarket(m); const prev = getMarket(); storage.setItem(MARKET_KEY, mk); if (mk !== prev) clearMarketView(); applyMarket(mk); return mk; }
   function getFundamentalsStore() {
     try {
       const s = JSON.parse(storage.getItem(FUND_KEY));
@@ -662,6 +764,8 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   if (mfSearchEl) mfSearchEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') mfSearch(); });
   const marketTg = $('market-toggle');
   if (marketTg) for (const b of marketTg.querySelectorAll('[data-market]')) b.addEventListener('click', () => setMarket(b.getAttribute('data-market')));
+  on('save-gh-token-btn', () => { saveGhToken($('gh-token') && $('gh-token').value); showToast(getGhToken() ? 'GitHub token saved' : 'Token cleared'); publishSync(); });
+  on('sync-now-btn', () => { publishSync(); });
   on('save-schedule-btn', () => {
     const mode = ($('schedule-mode') && $('schedule-mode').value) || 'default';
     let schedule = { mode: 'default' };
@@ -689,6 +793,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
   renderAll(getCollection());
   renderFundamentalsConfig();
   updateMarketLabels();
+  renderSyncStatus();
   if (autoSchedule) {
     for (const l of getCollection().lists) checkOneList(l.name); // check every list once on open
     scheduleAllLists();                                          // then each on its own cadence
@@ -783,6 +888,7 @@ export function initApp({ document: doc, storage, fetchImpl, notify, autoRefresh
     addSubscriberToActive, removeSubscriberFromActive, updateSubscriberOnActive, exportMailingListsJson,
     checkOneList, setScheduleOnActive, getFundamentalsConfig, setFundamentalsConfig, testFundamentals, resolveBrowserConfig,
     getMarket, setMarket, mfSearch, mfSelect, searchTickers,
+    publishSync, getSyncStore, saveGhToken, getGhToken, setSyncGistId,
   };
   return api;
 }
