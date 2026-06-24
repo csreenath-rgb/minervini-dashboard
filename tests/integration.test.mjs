@@ -779,3 +779,44 @@ describe('fetchSymbolSearch (data layer)', async () => {
     assert.deepEqual(r.map((x) => x.symbol), ['RELIANCE.NS']);
   });
 });
+
+// ---- email job: gist-first source resolution (auto-sync read side) ----
+import { resolveMarketSources } from '../scripts/check_alerts.mjs';
+import { GIST_FILE } from '../js/sync.js';
+
+describe('check_alerts.resolveMarketSources (gist first, committed/env backup)', () => {
+  const committedUS = { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'AAPL' }] }] };
+  const gistUS = { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'NVDA' }] }] };
+
+  test('uses gist watchlist + mailing when the gist provides them', () => {
+    const gistFiles = {
+      [GIST_FILE.watchlistUS]: gistUS,
+      [GIST_FILE.mailingUS]: { Default: ['live@x.com'] },
+    };
+    const { watchlist, mailing } = resolveMarketSources(gistFiles, 'US', committedUS, { Default: ['old@x.com'] });
+    assert.equal(watchlist.lists[0].items[0].symbol, 'NVDA');
+    assert.deepEqual(mailing, { Default: ['live@x.com'] });
+  });
+
+  test('falls back to committed watchlist + env mailing when gist is empty (unreachable)', () => {
+    const { watchlist, mailing } = resolveMarketSources({}, 'US', committedUS, { Default: ['env@x.com'] });
+    assert.equal(watchlist.lists[0].items[0].symbol, 'AAPL');
+    assert.deepEqual(mailing, { Default: ['env@x.com'] });
+  });
+
+  test('reads the correct files for the IN market', () => {
+    const gistFiles = {
+      [GIST_FILE.watchlistIN]: { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'TCS.NS' }] }] },
+      [GIST_FILE.mailingIN]: { Default: ['in@x.com'] },
+    };
+    const { watchlist, mailing } = resolveMarketSources(gistFiles, 'IN', null, {});
+    assert.equal(watchlist.lists[0].items[0].symbol, 'TCS.NS');
+    assert.deepEqual(mailing, { Default: ['in@x.com'] });
+  });
+
+  test('gist present for US does not leak into IN resolution', () => {
+    const gistFiles = { [GIST_FILE.watchlistUS]: gistUS };
+    const { watchlist } = resolveMarketSources(gistFiles, 'IN', null, {});
+    assert.equal(watchlist, null); // no IN gist file, no committed -> null (skipped by caller)
+  });
+});

@@ -1027,3 +1027,144 @@ describe('ticker type-ahead UI (jsdom)', async () => {
     assert.match(dom.window.document.getElementById('alerts').textContent, /Please enter a valid ticker symbol/i);
   });
 })
+
+// ===== Auto-sync to a secret GitHub gist (publish side) =====
+describe('auto-sync to GitHub gist (publish side)', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fxg = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function bootSync() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const calls = [];
+    let gistId = null;
+    const fetchImpl = async (url, opts = {}) => {
+      calls.push({ url: String(url), opts });
+      if (String(url).startsWith('https://api.github.com/gists')) {
+        if (opts.method === 'POST') { gistId = 'GID123'; return { ok: true, status: 201, json: async () => ({ id: gistId, html_url: 'https://gist.github.com/GID123' }) }; }
+        return { ok: true, status: 200, json: async () => ({ id: gistId || 'GID123', html_url: 'x' }) };
+      }
+      let body;
+      if (String(url).includes('%5EGSPC')) body = fxg('chart_GSPC.json');
+      else if (String(url).includes('fundamentals-timeseries')) body = fxg('fundamentals_AAPL.json');
+      else if (String(url).includes('/SPY')) body = fxg('chart_SPY.json');
+      else body = fxg('chart_AAPL.json');
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage, fetchImpl, notify: () => {}, autoRefreshMs: 0, syncDebounceMs: 0 });
+    const gistCalls = () => calls.filter((c) => c.url.startsWith('https://api.github.com/gists'));
+    const flush = () => new Promise((r) => dom.window.setTimeout(r, 8));
+    return { dom, app, gistCalls, flush };
+  }
+
+  test('index.html exposes the token + sync controls', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    for (const id of ['gh-token', 'save-gh-token-btn', 'sync-now-btn', 'sync-status']) {
+      assert.ok(html.includes(`id="${id}"`), `missing #${id}`);
+    }
+  });
+
+  test('no token -> publishSync skips, makes no gist network call', async () => {
+    const { app, gistCalls } = await bootSync();
+    const r = await app.publishSync();
+    assert.equal(r.skipped, true);
+    assert.equal(gistCalls().length, 0);
+  });
+
+  test('with a token, publishSync creates a secret gist and stores its id', async () => {
+    const { dom, app, gistCalls } = await bootSync();
+    dom.window.localStorage.setItem('minervini_watchlists_US', JSON.stringify(
+      { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'AAPL' }], subscribers: [] }] }));
+    app.saveGhToken('ghp_test');
+    await app.publishSync();
+    const calls = gistCalls();
+    assert.ok(calls.length >= 1);
+    const last = calls[calls.length - 1];
+    assert.equal(last.opts.method, 'POST');
+    const body = JSON.parse(last.opts.body);
+    assert.equal(body.public, false);                       // secret gist
+    assert.ok(body.files['watchlist.us.json']);
+    assert.equal(app.getSyncStore().gistId, 'GID123');
+  });
+
+  test('once a gist exists, later publishes PATCH the same gist', async () => {
+    const { dom, app, gistCalls } = await bootSync();
+    dom.window.localStorage.setItem('minervini_watchlists_US', JSON.stringify(
+      { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'AAPL' }], subscribers: [] }] }));
+    app.saveGhToken('ghp_test');
+    await app.publishSync();   // create
+    await app.publishSync();   // update
+    const methods = gistCalls().map((c) => c.opts.method);
+    assert.ok(methods.includes('POST') && methods.includes('PATCH'));
+  });
+
+  test('mailing-list emails are published to the gist (PII to secret gist, never the repo)', async () => {
+    const { dom, app, gistCalls } = await bootSync();
+    dom.window.localStorage.setItem('minervini_watchlists_US', JSON.stringify(
+      { version: 3, activeName: 'Default', lists: [{ name: 'Default', items: [{ symbol: 'AAPL' }], subscribers: ['me@x.com'] }] }));
+    app.saveGhToken('ghp_test');
+    await app.publishSync();
+    const body = JSON.parse(gistCalls().pop().opts.body);
+    assert.deepEqual(JSON.parse(body.files['mailing.us.json'].content), { Default: ['me@x.com'] });
+  });
+
+  test('editing the watchlist with a token configured auto-publishes (no copy/paste)', async () => {
+    const { dom, app, gistCalls, flush } = await bootSync();
+    app.saveGhToken('ghp_test');
+    await flush();
+    const before = gistCalls().length;
+    dom.window.document.getElementById('ticker-input').value = 'AAPL';
+    await app.analyze();
+    await app.addCurrentToWatchlist();   // saveCollection -> schedulePublish
+    await flush();
+    assert.ok(gistCalls().length > before, 'a watchlist edit should trigger an auto-publish');
+  });
+});
+
+// ===== Market toggle clears analysis + alerts (US/India separation) =====
+describe('market toggle clears the dashboard', async () => {
+  const { JSDOM } = await import('jsdom');
+  const fxm = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
+  async function bootMkt() {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const dom = new JSDOM(html, { url: 'https://example.test/', pretendToBeVisual: true });
+    const fetchImpl = async (url) => {
+      let body;
+      if (String(url).includes('%5EGSPC') || String(url).includes('%5ENSEI')) body = fxm('chart_GSPC.json');
+      else if (String(url).includes('fundamentals-timeseries')) body = fxm('fundamentals_AAPL.json');
+      else if (String(url).includes('/SPY')) body = fxm('chart_SPY.json');
+      else body = fxm('chart_AAPL.json');
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const { initApp } = await import('../js/app.js');
+    const app = initApp({ document: dom.window.document, storage: dom.window.localStorage, fetchImpl, notify: () => {}, autoRefreshMs: 0 });
+    return { dom, app };
+  }
+
+  test('toggling market clears the analyzed report, inputs, and alert banners', async () => {
+    const { dom, app } = await bootMkt();
+    const doc = dom.window.document;
+    doc.getElementById('ticker-input').value = 'AAPL';
+    await app.analyze();
+    assert.match(doc.getElementById('report-title').textContent, /AAPL/);
+    app.setWatchlist([{ symbol: 'SPY', entryPrice: 1 }]);
+    await app.refreshWatchlist();
+    assert.match(doc.getElementById('alerts').textContent, /SPY/);
+
+    app.setMarket('IN');   // toggle
+
+    assert.doesNotMatch(doc.getElementById('report-title').textContent, /AAPL/);
+    assert.match(doc.getElementById('verdict-entry').textContent, /No analysis yet/i);
+    assert.equal(doc.getElementById('ticker-input').value, '');
+    assert.equal(doc.getElementById('alerts').textContent.trim(), '');
+  });
+
+  test('toggling to the SAME market does not wipe an in-progress analysis', async () => {
+    const { dom, app } = await bootMkt();
+    const doc = dom.window.document;
+    doc.getElementById('ticker-input').value = 'AAPL';
+    await app.analyze();
+    app.setMarket('US');   // already US -> no-op clear
+    assert.match(doc.getElementById('report-title').textContent, /AAPL/);
+  });
+});
