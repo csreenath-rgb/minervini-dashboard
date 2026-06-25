@@ -1,5 +1,7 @@
 # Minervini SEPA Dashboard
 
+> **New here?** Start with the **[Onboarding & Usage Guide →](ONBOARDING.md)** — a step-by-step setup and usage walkthrough for any new member.
+
 A free, serverless stock/ETF analysis dashboard implementing the methodology from Mark Minervini's
 *Trade Like a Stock Market Wizard* (SEPA®). Type a ticker and get: the 8-point Trend Template
 checklist, an entry verdict with pivot buy point and buy zone, a stop-loss level, an exit verdict,
